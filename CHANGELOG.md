@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-03-13
+
 ### Added
 
 - Added the documented repository skeleton for benchmarks, datasets, mobile deployment, models, notebooks, and compression subpackages.
