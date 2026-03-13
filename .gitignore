@@ -19,6 +19,7 @@ pip-wheel-metadata/
 .env
 .env.local
 *.env
+TODO.txt
 
 # Models (large binary files — track via DVC or external storage)
 models/teacher/**
