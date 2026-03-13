@@ -20,6 +20,7 @@ pip-wheel-metadata/
 .env.local
 *.env
 TODO.txt
+.python-version
 
 # Models (large binary files — track via DVC or external storage)
 models/teacher/**
@@ -44,6 +45,11 @@ datasets/**/*.jpg
 *.mlpackage/
 *.ort
 *.gguf
+*.onnx.data
+*_tf_saved_model/
+checkpoints/
+wandb/
+*.log
 
 # IDE
 .vscode/
@@ -69,3 +75,4 @@ htmlcov/
 
 # HuggingFace cache
 .cache/
+huggingface/

@@ -32,17 +32,42 @@ Modern AI models are too large for smartphones. ShrinkLLM bridges the gap using:
 ```bash
 git clone https://github.com/nikreljin/shrink-llm.git
 cd shrink-llm
-python -m venv venv && source venv/bin/activate
+python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 
 # Export a model to ONNX
-python scripts/export_to_onnx.py --model microsoft/trocr-base-printed --output models/student/trocr_base.onnx
+python scripts/export_to_onnx.py --model microsoft/trocr-base-printed --task ocr --output models/student/trocr_base.onnx
 
 # Quantize to INT8
-python scripts/quantize.py --input models/student/trocr_base.onnx --precision int8 --output models/student/trocr_int8.onnx
+python scripts/quantize.py --input models/student/trocr_base.onnx --precision int8 --mode dynamic --output models/student/trocr_int8.onnx
 
 # Benchmark
 python scripts/benchmark.py --model models/student/trocr_int8.onnx --task ocr --dataset datasets/ocr/
+```
+
+## Development Setup
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+```
+
+Optional extras:
+
+```bash
+pip install -e ".[dev,tflite]"
+pip install -e ".[dev,coreml]"
+pip install -e ".[dev,gptq,audio]"
+```
+
+Common checks:
+
+```bash
+pytest -q
+ruff check scripts/ compression/ benchmarks/ tests/
+black --check scripts/ compression/ benchmarks/ tests/
+python scripts/run_pipeline.py --config configs/ocr_pipeline.yaml --dry-run
 ```
 
 ---
@@ -100,6 +125,10 @@ shrink-llm/
 ├── tests/                # Unit + integration tests
 └── docs/                 # Full documentation
 ```
+
+Generated model weights, raw datasets, mobile conversion artifacts, TensorFlow
+SavedModels, runtime scratch files, and local `TODO.txt` planning files are
+intentionally ignored.
 
 ---
 
