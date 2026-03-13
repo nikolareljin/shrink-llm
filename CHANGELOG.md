@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-03-13
+
+### Fixed
+
+- Corrected the public clone URL and expanded contributor setup steps to include submodule bootstrap and expected local tooling.
+- Added ignore rules for additional generated mobile/runtime artifacts such as `.mlmodel`, `.mlmodelc`, TensorFlow protobufs, and local output directories.
+
 ## [0.1.0] - 2026-03-13
 
 ### Added
