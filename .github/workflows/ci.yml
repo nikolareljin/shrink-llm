@@ -1,0 +1,24 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    uses: nikolareljin/ci-helpers/.github/workflows/ci.yml@production
+    with:
+      python_version: "3.11"
+      lint_command: |
+        pip install ruff black
+        ruff check scripts/ compression/ benchmarks/ tests/
+        black --check scripts/ compression/ benchmarks/ tests/
+      test_command: |
+        pip install -e ".[dev]"
+        pytest -q tests/

@@ -1,0 +1,6 @@
+[submodule "ci-helpers"]
+	path = ci-helpers
+	url = git@github.com:nikolareljin/ci-helpers.git
+[submodule "scripts/script-helpers"]
+	path = scripts/script-helpers
+	url = https://github.com/nikolareljin/script-helpers.git

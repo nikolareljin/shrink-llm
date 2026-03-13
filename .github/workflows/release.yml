@@ -1,0 +1,23 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - pyproject.toml
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    uses: nikolareljin/ci-helpers/.github/workflows/deploy.yml@production
+    with:
+      python_version: "3.11"
+      deploy_command: |
+        pip install tomllib 2>/dev/null || true
+        VERSION=$(python -c "import tomllib; d=tomllib.load(open('pyproject.toml','rb')); print(d['project']['version'])")
+        echo "Releasing v${VERSION}"
+        git tag "v${VERSION}" || echo "Tag already exists"
+        git push origin "v${VERSION}" || echo "Tag already pushed"
