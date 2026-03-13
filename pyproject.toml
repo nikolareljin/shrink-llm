@@ -1,0 +1,87 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "shrink-llm"
+version = "0.1.0"
+description = "Compress AI models for efficient smartphone deployment"
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.10"
+authors = [{ name = "Nik Reljin" }]
+
+dependencies = [
+    "torch>=2.2.0",
+    "transformers>=4.40.0",
+    "onnx>=1.16.0",
+    "onnxruntime>=1.18.0",
+    "optimum[onnxruntime]>=1.19.0",
+    "numpy>=1.26.0",
+    "scipy>=1.13.0",
+    "datasets>=2.19.0",
+    "accelerate>=0.30.0",
+    "pyyaml>=6.0.1",
+    "rich>=13.7.0",
+    "tqdm>=4.66.0",
+    "Pillow>=10.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=5.0.0",
+    "black>=24.0.0",
+    "ruff>=0.4.0",
+    "mypy>=1.9.0",
+    "ipykernel>=6.0.0",
+    "matplotlib>=3.8.0",
+    "pandas>=2.2.0",
+]
+tflite = [
+    "tensorflow>=2.16.0",
+    "onnx-tf>=1.10.0",
+]
+coreml = [
+    "coremltools>=7.2",
+]
+gptq = [
+    "auto-gptq>=0.7.0",
+    "bitsandbytes>=0.43.0",
+]
+audio = [
+    "librosa>=0.10.0",
+    "soundfile>=0.12.0",
+    "torchaudio>=2.2.0",
+]
+
+[project.scripts]
+shrink-export = "scripts.export_to_onnx:main"
+shrink-quantize = "scripts.quantize:main"
+shrink-prune = "scripts.prune:main"
+shrink-distill = "scripts.distill:main"
+shrink-benchmark = "scripts.benchmark:main"
+shrink-pipeline = "scripts.run_pipeline:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["compression*", "scripts*", "benchmarks*", "mobile_deployment*", "datasets*"]
+
+[tool.black]
+line-length = 100
+target-version = ["py310", "py311", "py312"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+select = ["E", "F", "W", "I", "N", "UP"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+strict = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"

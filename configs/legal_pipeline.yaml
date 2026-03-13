@@ -1,0 +1,51 @@
+# Legal Document Pipeline Configuration — ShrinkLLM
+# Teacher: Phi-3-medium | Student: Phi-3-mini → INT4 GPTQ
+
+task: legal
+model: microsoft/Phi-3-mini-4k-instruct
+teacher: microsoft/Phi-3-medium-4k-instruct
+
+onnx_opset: 17
+
+quantization:
+  precision: int4
+  mode: gptq
+  bits: 4
+  group_size: 128
+
+pruning:
+  method: layers
+  sparsity: 0.0  # Layer dropping handled by distillation arch
+
+distillation:
+  temperature: 4.0
+  alpha: 0.2
+  beta: 0.8
+  gamma: 0.1
+  align_hidden: true
+  epochs: 5
+  batch_size: 4
+  lr: 1e-5
+  fp16: true
+
+mobile:
+  android:
+    runtime: onnxruntime
+    format: gguf
+    quantization: Q4_K_M
+  ios:
+    deployment_target: iOS17
+    compute_units: CPU_AND_NE
+    quantization: int8
+
+benchmark:
+  runtime: onnxruntime
+  warmup_runs: 5
+  benchmark_runs: 50
+  dataset: datasets/legal/eval/
+
+success_criteria:
+  min_f1: 0.80
+  max_size_mb: 800
+  max_latency_ms: 3000
+  max_accuracy_drop_pct: 5.0

@@ -1,0 +1,70 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+venv/
+.venv/
+env/
+.env/
+pip-wheel-metadata/
+
+# Environment
+.env
+.env.local
+*.env
+
+# Models (large binary files — track via DVC or external storage)
+models/teacher/**
+models/student/**
+!models/teacher/.gitkeep
+!models/student/.gitkeep
+
+# Datasets (large files)
+datasets/ocr/raw/
+datasets/legal/raw/
+datasets/baby_cry/raw/
+datasets/**/*.npy
+datasets/**/*.wav
+datasets/**/*.png
+datasets/**/*.jpg
+
+# Benchmark results (keep tracked)
+# benchmarks/results/ is tracked
+
+# TFLite / CoreML / ONNX outputs (large binaries)
+*.tflite
+*.mlpackage/
+*.ort
+*.gguf
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+*.junit.xml
+
+# MyPy
+.mypy_cache/
+
+# Ruff
+.ruff_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# HuggingFace cache
+.cache/

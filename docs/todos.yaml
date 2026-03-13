@@ -1,0 +1,212 @@
+# ShrinkLLM — GitHub Issue TODO List
+# Machine-readable format for auto-generating GitHub issues.
+# Feed this back to the AI to create issues via: gh issue create
+
+todos:
+  - id: SHRINK-001
+    title: "Implement ONNX export for encoder-decoder models (TrOCR)"
+    description: |
+      Create scripts/export_to_onnx.py with support for seq2seq models (TrOCR) and
+      encoder-only models (BERT, ViT). Handle dynamic axes for variable-length inputs
+      and validate exported model with ORT inference check.
+    acceptance_criteria:
+      - TrOCR-base exports successfully to ONNX opset 17
+      - Dynamic axes set correctly for batch_size and sequence_length
+      - Exported model validated with sample inputs; max numerical diff < 1e-4
+      - CLI --help complete and all args documented
+      - tests/test_export.py passes
+    dependencies: []
+    labels: [pipeline, onnx, priority-high, phase-1]
+    milestone: "Phase 1: Model Selection + ONNX Export"
+    estimate: "3d"
+
+  - id: SHRINK-002
+    title: "Implement dynamic INT8 quantization"
+    description: |
+      Implement dynamic INT8 quantization in scripts/quantize.py using onnxruntime's
+      quantize_dynamic. Must support skip_ops to protect sensitive layers.
+    acceptance_criteria:
+      - Dynamic INT8 produces valid ONNX model from TrOCR-base ONNX export
+      - Size reduction ≥ 3.5× vs FP32 input
+      - Model validates with ORT inference
+      - tests/test_quantization.py passes
+    dependencies: [SHRINK-001]
+    labels: [compression, quantization, priority-high, phase-2]
+    milestone: "Phase 2: Quantization + Pruning"
+    estimate: "2d"
+
+  - id: SHRINK-003
+    title: "Implement static INT8 quantization with calibration dataset"
+    description: |
+      Extend scripts/quantize.py to support static INT8 quantization using
+      onnxruntime's CalibrationDataReader. Support custom calibration datasets
+      per task (OCR, legal, baby_cry).
+    acceptance_criteria:
+      - Static INT8 quantization produces valid ONNX model
+      - Calibration dataset loading works for all three tasks
+      - Accuracy drop on IIIT-5K ≤ 1% vs FP32 baseline
+      - Unit test passes
+    dependencies: [SHRINK-002]
+    labels: [compression, quantization, phase-2]
+    milestone: "Phase 2: Quantization + Pruning"
+    estimate: "4d"
+
+  - id: SHRINK-004
+    title: "Implement GPTQ INT4 quantization for legal LLM"
+    description: |
+      Add GPTQ 4-bit quantization mode to scripts/quantize.py using auto-gptq.
+      Target: Phi-3-mini compressed to < 800 MB.
+    acceptance_criteria:
+      - GPTQ quantization runs on Phi-3-mini
+      - Output model size < 800 MB
+      - Legal task F1 ≥ 80% on CUAD eval set
+    dependencies: [SHRINK-001]
+    labels: [compression, quantization, llm, phase-2]
+    milestone: "Phase 2: Quantization + Pruning"
+    estimate: "5d"
+
+  - id: SHRINK-005
+    title: "Implement attention head pruning"
+    description: |
+      Create compression/pruning/attention_pruner.py and expose via scripts/prune.py.
+      Use Taylor expansion (gradient × activation) for head importance scoring.
+    acceptance_criteria:
+      - Head importance scores computed correctly
+      - Bottom-K% heads zeroed out
+      - Short fine-tune loop runs after pruning
+      - Parameter count reduced by ≥ 20%
+      - tests/test_pruning.py passes
+    dependencies: [SHRINK-001]
+    labels: [compression, pruning, phase-2]
+    milestone: "Phase 2: Quantization + Pruning"
+    estimate: "5d"
+
+  - id: SHRINK-006
+    title: "Implement knowledge distillation trainer"
+    description: |
+      Create DistillationLoss (CE + KL + MSE) and DistillationTrainer in scripts/distill.py.
+      Support temperature scaling, hidden state alignment, and mixed dataset training.
+    acceptance_criteria:
+      - DistillationLoss computes all three loss components correctly
+      - DistillationTrainer trains for N epochs without crash
+      - Student reaches ≥ 90% of teacher accuracy on held-out eval set
+      - tests/test_distillation.py passes
+    dependencies: [SHRINK-001]
+    labels: [distillation, training, priority-high, phase-3]
+    milestone: "Phase 3: Distillation + Fine-tuning"
+    estimate: "7d"
+
+  - id: SHRINK-007
+    title: "Download and preprocess OCR datasets (IIIT-5K, IAM)"
+    description: |
+      Implement datasets/ocr/download.py and datasets/ocr/preprocess.py.
+      Handle IIIT-5K word recognition dataset and IAM handwriting database.
+    acceptance_criteria:
+      - Download scripts produce consistent dataset structure
+      - Preprocessed data compatible with TrOCR processor
+      - Train/val/test splits created
+    dependencies: []
+    labels: [datasets, ocr, phase-1]
+    milestone: "Phase 1: Model Selection + ONNX Export"
+    estimate: "3d"
+
+  - id: SHRINK-008
+    title: "Download and preprocess legal datasets (CUAD, ContractNLI)"
+    description: |
+      Implement datasets/legal/download.py and datasets/legal/preprocess.py.
+      Include CUAD for clause extraction and ContractNLI for entailment.
+    acceptance_criteria:
+      - CUAD and ContractNLI datasets downloaded and split
+      - Tokenized format compatible with Phi-3-mini tokenizer
+    dependencies: []
+    labels: [datasets, legal, phase-1]
+    milestone: "Phase 1: Model Selection + ONNX Export"
+    estimate: "3d"
+
+  - id: SHRINK-009
+    title: "Download and preprocess baby cry audio datasets"
+    description: |
+      Implement datasets/baby_cry/download.py with Donate-a-cry corpus.
+      Preprocess audio to mel spectrograms and 16kHz mono WAV.
+    acceptance_criteria:
+      - Donate-a-cry corpus downloaded and labeled
+      - Audio resampled to 16kHz, 5-second clips
+      - Compatible with AST feature extractor
+    dependencies: []
+    labels: [datasets, audio, phase-1]
+    milestone: "Phase 1: Model Selection + ONNX Export"
+    estimate: "3d"
+
+  - id: SHRINK-010
+    title: "Implement TFLite conversion pipeline"
+    description: |
+      Create scripts/convert_to_tflite.py using onnx2tf + tf.lite.TFLiteConverter.
+      Support FP16 and INT8 (full-integer) quantization modes.
+    acceptance_criteria:
+      - OCR student model converts to TFLite without errors
+      - TFLite model produces same output as ONNX (within tolerance)
+      - FP16 and INT8 modes both work
+      - Size reduction vs ONNX ≥ 10%
+    dependencies: [SHRINK-002]
+    labels: [mobile, android, tflite, phase-4]
+    milestone: "Phase 4: Mobile Conversion"
+    estimate: "4d"
+
+  - id: SHRINK-011
+    title: "Implement CoreML conversion pipeline"
+    description: |
+      Create scripts/convert_to_coreml.py using coremltools.convert().
+      Support Apple Neural Engine optimization via compute_units=ALL.
+    acceptance_criteria:
+      - OCR student model converts to .mlpackage
+      - CoreML model spec validates without errors
+      - FP16 weight compression applied
+      - Runs on iOS Simulator or device
+    dependencies: [SHRINK-002]
+    labels: [mobile, ios, coreml, phase-4]
+    milestone: "Phase 4: Mobile Conversion"
+    estimate: "4d"
+
+  - id: SHRINK-012
+    title: "Implement full benchmark suite"
+    description: |
+      Create scripts/benchmark.py that measures accuracy (CER/F1/acc), latency
+      (mean/p95/p99), peak RAM, and model size. Output JSON + Markdown reports.
+    acceptance_criteria:
+      - Latency profiler runs warmup + benchmark loops correctly
+      - JSON output matches BenchmarkResult schema
+      - Markdown report is readable and correct
+      - tests/test_benchmarks.py passes
+    dependencies: [SHRINK-002]
+    labels: [benchmarking, priority-high, phase-5]
+    milestone: "Phase 5: Benchmarking + Optimization"
+    estimate: "5d"
+
+  - id: SHRINK-013
+    title: "Set up GitHub Actions CI pipeline"
+    description: |
+      Create .github/workflows/ci.yml using ci-helpers shared workflows.
+      Run pytest on push to main and PRs. Add linting (ruff, black).
+    acceptance_criteria:
+      - CI runs on push to main and pull_request
+      - All tests pass in CI
+      - Ruff and black checks pass
+      - Concurrency cancellation configured
+    dependencies: []
+    labels: [ci, infrastructure, priority-high, phase-1]
+    milestone: "Phase 1: Model Selection + ONNX Export"
+    estimate: "1d"
+
+  - id: SHRINK-014
+    title: "Add release tagging workflow"
+    description: |
+      Create .github/workflows/release.yml using ci-helpers shared release actions.
+      Auto-tag on version bump in pyproject.toml on merge to main.
+    acceptance_criteria:
+      - Release created on version bump
+      - Tag matches pyproject.toml version
+      - Release notes auto-generated from commits
+    dependencies: [SHRINK-013]
+    labels: [ci, release, infrastructure]
+    milestone: "Phase 6: v1.0 Release"
+    estimate: "1d"
