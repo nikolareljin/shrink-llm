@@ -30,8 +30,9 @@ Modern AI models are too large for smartphones. ShrinkLLM bridges the gap using:
 ## Quick Start
 
 ```bash
-git clone https://github.com/nikreljin/shrink-llm.git
+git clone https://github.com/nikolareljin/shrink-llm.git
 cd shrink-llm
+git submodule update --init --recursive
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 
@@ -48,10 +49,17 @@ python scripts/benchmark.py --model models/student/trocr_int8.onnx --task ocr --
 ## Development Setup
 
 ```bash
+git submodule update --init --recursive
 python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 ```
+
+Baseline requirements:
+
+- Python 3.10 or newer for local development.
+- Initialize `scripts/script-helpers` after cloning so shared shell helpers are available.
+- Keep model weights, raw datasets, and mobile build outputs outside git-tracked source paths.
 
 Optional extras:
 
