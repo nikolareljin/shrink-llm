@@ -10,15 +10,31 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   ci:
-    uses: nikolareljin/ci-helpers/.github/workflows/ci.yml@production
-    with:
-      python_version: "3.11"
-      lint_command: |
-        pip install ruff black
-        ruff check scripts/ compression/ benchmarks/ tests/
-        black --check scripts/ compression/ benchmarks/ tests/
-      test_command: |
-        pip install -e ".[dev]"
-        pytest -q tests/
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Lint
+        shell: bash
+        run: |
+          set -euo pipefail
+          pip install ruff black
+          ruff check scripts/ compression/ benchmarks/ tests/
+          black --check scripts/ compression/ benchmarks/ tests/
+
+      - name: Test
+        shell: bash
+        run: |
+          set -euo pipefail
+          pip install -e ".[dev]"
+          pytest -q tests/

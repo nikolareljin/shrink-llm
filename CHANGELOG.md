@@ -8,6 +8,7 @@ All notable changes to this project will be documented in this file.
 
 - Resolved Python CI lint failures by migrating deprecated Ruff lint settings into `tool.ruff.lint`, removing unused imports and locals, and updating optional annotations to modern `X | None` syntax.
 - Reformatted benchmark, conversion, pruning, quantization, pipeline, and test modules so `black --check scripts/ compression/ benchmarks/ tests/` passes consistently in CI.
+- Replaced shared reusable GitHub workflows with local workflow definitions that use Node 24-ready `actions/checkout@v5` and `actions/setup-python@v6`, removing the Node 20 Actions deprecation warning from CI.
 
 ## [0.1.1] - 2026-03-13
 
