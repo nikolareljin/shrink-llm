@@ -42,12 +42,18 @@ datasets/**/*.jpg
 
 # TFLite / CoreML / ONNX outputs (large binaries)
 *.tflite
+*.mlmodel
+*.mlmodelc/
 *.mlpackage/
 *.ort
 *.gguf
+*.bin
 *.onnx.data
+*.pb
 *_tf_saved_model/
 checkpoints/
+outputs/
+runs/
 wandb/
 *.log
 
