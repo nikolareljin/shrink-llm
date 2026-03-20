@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Resolved Python CI lint failures by migrating deprecated Ruff lint settings into `tool.ruff.lint`, removing unused imports and locals, and updating optional annotations to modern `X | None` syntax.
+- Reformatted benchmark, conversion, pruning, quantization, pipeline, and test modules so `black --check scripts/ compression/ benchmarks/ tests/` passes consistently in CI.
+
 ## [0.1.1] - 2026-03-13
 
 ### Fixed
