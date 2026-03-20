@@ -12,7 +12,7 @@ from pathlib import Path
 
 import torch
 import torch.nn as nn
-from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, Trainer, TrainingArguments
+from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, TrainingArguments
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger(__name__)
@@ -78,11 +78,14 @@ class MLPPruner:
         hooks = []
         for name, module in self.model.named_modules():
             if isinstance(module, nn.Linear) and "intermediate" in name:
+
                 def make_hook(n):
                     def hook(m, inp, out):
                         freq = (out.detach().abs() > 0.01).float().mean(dim=(0, 1))
                         self.activation_stats[n] = self.activation_stats.get(n, freq * 0) + freq
+
                     return hook
+
                 hooks.append(module.register_forward_hook(make_hook(name)))
 
         self.model.eval()
@@ -142,23 +145,33 @@ def count_parameters(model: nn.Module) -> int:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Structured pruning for transformer models")
     parser.add_argument("--model", required=True, help="HuggingFace model ID or local path")
-    parser.add_argument("--task", required=True, choices=["ocr", "legal", "baby_cry"], help="Task type")
+    parser.add_argument(
+        "--task", required=True, choices=["ocr", "legal", "baby_cry"], help="Task type"
+    )
     parser.add_argument(
         "--method",
         required=True,
         choices=["attention_heads", "mlp", "layers", "magnitude"],
         help="Pruning method",
     )
-    parser.add_argument("--sparsity", type=float, default=0.3, help="Fraction of neurons/heads to prune (0–1)")
-    parser.add_argument("--output-dir", required=True, type=Path, help="Directory to save pruned model")
-    parser.add_argument("--finetune-epochs", type=int, default=0, help="Epochs to fine-tune after pruning")
+    parser.add_argument(
+        "--sparsity", type=float, default=0.3, help="Fraction of neurons/heads to prune (0–1)"
+    )
+    parser.add_argument(
+        "--output-dir", required=True, type=Path, help="Directory to save pruned model"
+    )
+    parser.add_argument(
+        "--finetune-epochs", type=int, default=0, help="Epochs to fine-tune after pruning"
+    )
     parser.add_argument("--device", default="cpu", choices=["cpu", "cuda"])
     args = parser.parse_args()
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     log.info("Loading model %s...", args.model)
-    model = AutoModelForCausalLM.from_pretrained(args.model, torch_dtype=torch.float32).to(args.device)
+    model = AutoModelForCausalLM.from_pretrained(args.model, torch_dtype=torch.float32).to(
+        args.device
+    )
     tokenizer = AutoTokenizer.from_pretrained(args.model)
 
     before_params = count_parameters(model)
@@ -188,7 +201,7 @@ def main() -> None:
 
     if args.finetune_epochs > 0:
         log.info("Fine-tuning pruned model for %d epochs...", args.finetune_epochs)
-        training_args = TrainingArguments(
+        _training_args = TrainingArguments(
             output_dir=str(args.output_dir / "finetune_checkpoints"),
             num_train_epochs=args.finetune_epochs,
             per_device_train_batch_size=4,

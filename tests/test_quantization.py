@@ -2,18 +2,14 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-from unittest.mock import MagicMock, patch
-
-import numpy as np
-import pytest
-
 
 class TestCalibrationDataReader:
     def test_synthetic_fallback_when_no_files(self, tmp_path):
         from scripts.quantize import SimpleCalibrationDataReader
 
-        reader = SimpleCalibrationDataReader(tmp_path, ["input_ids", "attention_mask"], max_samples=10)
+        reader = SimpleCalibrationDataReader(
+            tmp_path, ["input_ids", "attention_mask"], max_samples=10
+        )
         batch = reader.get_next()
         assert batch is not None
         assert "input_ids" in batch or "attention_mask" in batch
@@ -46,6 +42,7 @@ class TestSizeComparison:
         after.write_bytes(b"0" * 250000)
 
         import logging
+
         with caplog.at_level(logging.INFO):
             _log_size_comparison(before, after)
 

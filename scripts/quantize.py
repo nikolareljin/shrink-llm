@@ -8,12 +8,11 @@ from __future__ import annotations
 
 import argparse
 import logging
+from collections.abc import Generator
 from pathlib import Path
-from typing import Generator
 
 import numpy as np
 import onnx
-import onnxruntime as ort
 from onnxruntime.quantization import (
     CalibrationDataReader,
     QuantFormat,
@@ -42,9 +41,13 @@ class SimpleCalibrationDataReader(CalibrationDataReader):
         files = sorted(self.data_dir.glob("*.npy"))[: self.max_samples]
         if not files:
             # Fall back to synthetic calibration data
-            log.warning("No .npy files found in %s — using synthetic calibration data", self.data_dir)
+            log.warning(
+                "No .npy files found in %s — using synthetic calibration data", self.data_dir
+            )
             for _ in range(min(64, self.max_samples)):
-                yield {name: np.random.randn(1, 128).astype(np.float32) for name in self.input_names}
+                yield {
+                    name: np.random.randn(1, 128).astype(np.float32) for name in self.input_names
+                }
             return
         for f in files:
             data = np.load(f, allow_pickle=True).item()
@@ -125,7 +128,9 @@ def gptq_quantize(model_id: str, output_dir: Path, bits: int = 4, group_size: in
 
     # Minimal calibration dataset
     calibration_dataset = [
-        tokenizer("Legal document analysis requires careful reading of clauses.", return_tensors="pt")
+        tokenizer(
+            "Legal document analysis requires careful reading of clauses.", return_tensors="pt"
+        )
         for _ in range(128)
     ]
     model.quantize(calibration_dataset)
@@ -162,8 +167,12 @@ def main() -> None:
         choices=["dynamic", "static", "gptq"],
         help="Quantization mode (default: dynamic)",
     )
-    parser.add_argument("--calibration-data", type=Path, help="Calibration dataset directory (required for static)")
-    parser.add_argument("--calibration-samples", type=int, default=512, help="Number of calibration samples")
+    parser.add_argument(
+        "--calibration-data", type=Path, help="Calibration dataset directory (required for static)"
+    )
+    parser.add_argument(
+        "--calibration-samples", type=int, default=512, help="Number of calibration samples"
+    )
     parser.add_argument(
         "--skip-ops",
         default=",".join(DEFAULT_SKIP_OPS),
@@ -184,7 +193,9 @@ def main() -> None:
     elif args.mode == "static":
         if not args.calibration_data:
             parser.error("--calibration-data is required for static quantization")
-        static_quantize(args.input, args.output, args.calibration_data, args.calibration_samples, skip_ops)
+        static_quantize(
+            args.input, args.output, args.calibration_data, args.calibration_samples, skip_ops
+        )
     else:
         dynamic_quantize(args.input, args.output, skip_ops)
 

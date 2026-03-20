@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -63,8 +62,6 @@ class TestBenchmarkResult:
 
 class TestMarkdownGeneration:
     def test_generates_markdown_file(self, tmp_path):
-        from dataclasses import asdict
-
         from scripts.benchmark import BenchmarkResult, generate_markdown
 
         result = BenchmarkResult(
