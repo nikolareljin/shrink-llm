@@ -15,7 +15,6 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from statistics import mean, quantiles
-from typing import Optional
 
 import numpy as np
 
@@ -35,9 +34,9 @@ class BenchmarkResult:
     accuracy: dict = field(default_factory=dict)
     latency_ms: dict = field(default_factory=dict)
     memory_mb: dict = field(default_factory=dict)
-    size_reduction_pct: Optional[float] = None
-    teacher_name: Optional[str] = None
-    teacher_size_mb: Optional[float] = None
+    size_reduction_pct: float | None = None
+    teacher_name: str | None = None
+    teacher_size_mb: float | None = None
 
 
 class LatencyProfiler:
@@ -146,8 +145,8 @@ def generate_markdown(result: BenchmarkResult, output_path: Path) -> None:
         f"**Runtime**: {result.runtime}",
         "",
         "## Model",
-        f"| Property | Value |",
-        f"|---|---|",
+        "| Property | Value |",
+        "|---|---|",
         f"| Name | `{result.model_name}` |",
         f"| Size | {result.model_size_mb:.1f} MB |",
     ]
@@ -180,9 +179,13 @@ def generate_markdown(result: BenchmarkResult, output_path: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Benchmark a compressed model")
-    parser.add_argument("--model", required=True, help="Model file path (.onnx, .tflite, .mlpackage)")
+    parser.add_argument(
+        "--model", required=True, help="Model file path (.onnx, .tflite, .mlpackage)"
+    )
     parser.add_argument("--task", required=True, choices=["ocr", "legal", "baby_cry"])
-    parser.add_argument("--runtime", default="onnxruntime", choices=["onnxruntime", "tflite", "coreml"])
+    parser.add_argument(
+        "--runtime", default="onnxruntime", choices=["onnxruntime", "tflite", "coreml"]
+    )
     parser.add_argument("--dataset", type=Path, help="Evaluation dataset directory")
     parser.add_argument("--warmup-runs", type=int, default=10)
     parser.add_argument("--benchmark-runs", type=int, default=100)
@@ -223,7 +226,10 @@ def main() -> None:
         runtime=args.runtime,
         accuracy={},  # populate from eval_dataset if provided
         latency_ms=latency,
-        memory_mb={"rss_after_load": round(mem_after, 1), "rss_delta": round(mem_after - mem_before, 1)},
+        memory_mb={
+            "rss_after_load": round(mem_after, 1),
+            "rss_delta": round(mem_after - mem_before, 1),
+        },
         size_reduction_pct=size_reduction,
         teacher_name=args.teacher_name,
         teacher_size_mb=args.teacher_size_mb,

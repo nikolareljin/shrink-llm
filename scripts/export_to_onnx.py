@@ -11,11 +11,10 @@ import json
 import logging
 from pathlib import Path
 
-import numpy as np
 import onnx
 import onnxruntime as ort
 import torch
-from transformers import AutoConfig, AutoProcessor, AutoTokenizer
+from transformers import AutoConfig, AutoTokenizer
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger(__name__)
@@ -26,7 +25,10 @@ TASK_CONFIGS: dict[str, dict] = {
         "processor_class": "TrOCRProcessor",
         "input_names": ["pixel_values"],
         "output_names": ["logits"],
-        "dynamic_axes": {"pixel_values": {0: "batch_size"}, "logits": {0: "batch_size", 1: "sequence_length"}},
+        "dynamic_axes": {
+            "pixel_values": {0: "batch_size"},
+            "logits": {0: "batch_size", 1: "sequence_length"},
+        },
     },
     "legal": {
         "model_class": "AutoModelForCausalLM",
@@ -44,7 +46,10 @@ TASK_CONFIGS: dict[str, dict] = {
         "processor_class": "AutoFeatureExtractor",
         "input_names": ["input_values"],
         "output_names": ["logits"],
-        "dynamic_axes": {"input_values": {0: "batch_size", 1: "sequence_length"}, "logits": {0: "batch_size"}},
+        "dynamic_axes": {
+            "input_values": {0: "batch_size", 1: "sequence_length"},
+            "logits": {0: "batch_size"},
+        },
     },
     "classification": {
         "model_class": "AutoModelForImageClassification",
@@ -168,9 +173,15 @@ def main() -> None:
     )
     parser.add_argument("--output", required=True, type=Path, help="Output .onnx file path")
     parser.add_argument("--opset", type=int, default=17, help="ONNX opset version (default: 17)")
-    parser.add_argument("--device", default="cpu", choices=["cpu", "cuda"], help="Device for model loading")
-    parser.add_argument("--validate", action="store_true", help="Run ORT inference validation after export")
-    parser.add_argument("--no-save-config", action="store_true", help="Skip saving model_config.json")
+    parser.add_argument(
+        "--device", default="cpu", choices=["cpu", "cuda"], help="Device for model loading"
+    )
+    parser.add_argument(
+        "--validate", action="store_true", help="Run ORT inference validation after export"
+    )
+    parser.add_argument(
+        "--no-save-config", action="store_true", help="Skip saving model_config.json"
+    )
     args = parser.parse_args()
 
     model, processor, config = load_model(args.model, args.task, args.device)

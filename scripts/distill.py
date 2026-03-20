@@ -11,11 +11,10 @@ import argparse
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+import torch.nn.functional as functional
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
@@ -29,11 +28,11 @@ log = logging.getLogger(__name__)
 
 @dataclass
 class DistillationConfig:
-    temperature: float = 6.0     # Softening temperature for KL loss
-    alpha: float = 0.1           # Weight for hard label (CE) loss
-    beta: float = 0.9            # Weight for soft label (KL) loss
-    gamma: float = 0.1           # Weight for hidden state alignment loss
-    align_hidden: bool = False   # Whether to align intermediate representations
+    temperature: float = 6.0  # Softening temperature for KL loss
+    alpha: float = 0.1  # Weight for hard label (CE) loss
+    beta: float = 0.9  # Weight for soft label (KL) loss
+    gamma: float = 0.1  # Weight for hidden state alignment loss
+    align_hidden: bool = False  # Whether to align intermediate representations
 
 
 class DistillationLoss(nn.Module):
@@ -48,18 +47,23 @@ class DistillationLoss(nn.Module):
         student_logits: torch.Tensor,
         teacher_logits: torch.Tensor,
         labels: torch.Tensor,
-        student_hidden: Optional[torch.Tensor] = None,
-        teacher_hidden: Optional[torch.Tensor] = None,
+        student_hidden: torch.Tensor | None = None,
+        teacher_hidden: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
-        T = self.config.temperature
+        temperature = self.config.temperature
 
         # Hard label loss (cross-entropy against ground truth)
-        loss_ce = F.cross_entropy(student_logits.view(-1, student_logits.size(-1)), labels.view(-1))
+        loss_ce = functional.cross_entropy(
+            student_logits.view(-1, student_logits.size(-1)),
+            labels.view(-1),
+        )
 
         # Soft label loss (KL divergence against teacher soft targets)
-        student_log_probs = F.log_softmax(student_logits / T, dim=-1)
-        teacher_probs = F.softmax(teacher_logits / T, dim=-1)
-        loss_kl = F.kl_div(student_log_probs, teacher_probs, reduction="batchmean") * (T**2)
+        student_log_probs = functional.log_softmax(student_logits / temperature, dim=-1)
+        teacher_probs = functional.softmax(teacher_logits / temperature, dim=-1)
+        loss_kl = functional.kl_div(student_log_probs, teacher_probs, reduction="batchmean") * (
+            temperature**2
+        )
 
         total = self.config.alpha * loss_ce + self.config.beta * loss_kl
 
@@ -67,7 +71,7 @@ class DistillationLoss(nn.Module):
 
         # Hidden state alignment loss (MSE between projected hidden states)
         if self.config.align_hidden and student_hidden is not None and teacher_hidden is not None:
-            loss_hidden = F.mse_loss(student_hidden, teacher_hidden.detach())
+            loss_hidden = functional.mse_loss(student_hidden, teacher_hidden.detach())
             total = total + self.config.gamma * loss_hidden
             losses["loss_hidden"] = loss_hidden
             losses["loss_total"] = total
@@ -93,7 +97,7 @@ class DistillationTrainer(Trainer):
         self,
         teacher_model: nn.Module,
         distill_config: DistillationConfig,
-        projector: Optional[HiddenStateProjector] = None,
+        projector: HiddenStateProjector | None = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -111,7 +115,9 @@ class DistillationTrainer(Trainer):
 
         # Teacher forward (no grad)
         with torch.no_grad():
-            teacher_outputs = self.teacher_model(**inputs, output_hidden_states=self.distill_config.align_hidden)
+            teacher_outputs = self.teacher_model(
+                **inputs, output_hidden_states=self.distill_config.align_hidden
+            )
             teacher_logits = teacher_outputs.logits
 
         # Optional hidden state alignment
@@ -122,7 +128,9 @@ class DistillationTrainer(Trainer):
             if self.projector is not None:
                 student_hidden = self.projector(student_hidden)
 
-        losses = self.distill_loss(student_logits, teacher_logits, labels, student_hidden, teacher_hidden)
+        losses = self.distill_loss(
+            student_logits, teacher_logits, labels, student_hidden, teacher_hidden
+        )
         loss = losses["loss_total"]
 
         # Log individual loss components
@@ -139,7 +147,9 @@ def main() -> None:
     parser.add_argument("--student", required=True, help="Student model HuggingFace ID or path")
     parser.add_argument("--task", required=True, choices=["ocr", "legal", "baby_cry"])
     parser.add_argument("--dataset", required=True, type=Path, help="Training dataset directory")
-    parser.add_argument("--output-dir", required=True, type=Path, help="Output directory for distilled model")
+    parser.add_argument(
+        "--output-dir", required=True, type=Path, help="Output directory for distilled model"
+    )
     parser.add_argument("--temperature", type=float, default=6.0)
     parser.add_argument("--alpha", type=float, default=0.1, help="CE loss weight")
     parser.add_argument("--beta", type=float, default=0.9, help="KL loss weight")
@@ -155,25 +165,31 @@ def main() -> None:
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     log.info("Loading teacher: %s", args.teacher)
-    teacher = AutoModelForCausalLM.from_pretrained(args.teacher, torch_dtype=torch.float32).to(args.device).eval()
+    teacher = (
+        AutoModelForCausalLM.from_pretrained(args.teacher, torch_dtype=torch.float32)
+        .to(args.device)
+        .eval()
+    )
 
     log.info("Loading student: %s", args.student)
-    student = AutoModelForCausalLM.from_pretrained(args.student, torch_dtype=torch.float32).to(args.device)
+    student = AutoModelForCausalLM.from_pretrained(args.student, torch_dtype=torch.float32).to(
+        args.device
+    )
 
     tokenizer = AutoTokenizer.from_pretrained(args.student)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
     # Optional projector for hidden state alignment
-    projector = None
+    _projector = None
     if args.align_hidden:
         t_dim = teacher.config.hidden_size
         s_dim = student.config.hidden_size
         if t_dim != s_dim:
-            projector = HiddenStateProjector(s_dim, t_dim).to(args.device)
+            _projector = HiddenStateProjector(s_dim, t_dim).to(args.device)
             log.info("Hidden state projector: %d → %d", s_dim, t_dim)
 
-    distill_config = DistillationConfig(
+    _distill_config = DistillationConfig(
         temperature=args.temperature,
         alpha=args.alpha,
         beta=args.beta,
@@ -181,7 +197,7 @@ def main() -> None:
         align_hidden=args.align_hidden,
     )
 
-    training_args = TrainingArguments(
+    _training_args = TrainingArguments(
         output_dir=str(args.output_dir / "checkpoints"),
         num_train_epochs=args.epochs,
         per_device_train_batch_size=args.batch_size,
@@ -196,16 +212,24 @@ def main() -> None:
         report_to="none",
     )
 
-    log.info("Distillation config: T=%.1f α=%.2f β=%.2f γ=%.2f", args.temperature, args.alpha, args.beta, args.gamma)
+    log.info(
+        "Distillation config: T=%.1f α=%.2f β=%.2f γ=%.2f",
+        args.temperature,
+        args.alpha,
+        args.beta,
+        args.gamma,
+    )
     log.info("NOTE: Inject your dataset into DistillationTrainer to enable training.")
-    log.info("Teacher params: %s | Student params: %s",
-             f"{sum(p.numel() for p in teacher.parameters()):,}",
-             f"{sum(p.numel() for p in student.parameters()):,}")
+    log.info(
+        "Teacher params: %s | Student params: %s",
+        f"{sum(p.numel() for p in teacher.parameters()):,}",
+        f"{sum(p.numel() for p in student.parameters()):,}",
+    )
 
     # trainer = DistillationTrainer(
     #     teacher_model=teacher,
     #     distill_config=distill_config,
-    #     projector=projector,
+    #     projector=_projector,
     #     model=student,
     #     args=training_args,
     #     train_dataset=train_dataset,
@@ -215,7 +239,9 @@ def main() -> None:
     # trainer.train()
     # student.save_pretrained(str(args.output_dir))
     # tokenizer.save_pretrained(str(args.output_dir))
-    log.info("Distillation trainer configured. Uncomment training code and inject datasets to begin.")
+    log.info(
+        "Distillation trainer configured. Uncomment training code and inject datasets to begin."
+    )
 
 
 if __name__ == "__main__":

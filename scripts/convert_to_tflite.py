@@ -119,15 +119,25 @@ def main() -> None:
         choices=["none", "fp16", "int8"],
         help="TFLite quantization mode (default: none)",
     )
-    parser.add_argument("--representative-dataset", type=Path, help="Directory with .npy files for full-int8 calibration")
+    parser.add_argument(
+        "--representative-dataset",
+        type=Path,
+        help="Directory with .npy files for full-int8 calibration",
+    )
     parser.add_argument(
         "--optimize-for",
         default="latency",
         choices=["latency", "size", "default"],
         help="Optimization target (default: latency)",
     )
-    parser.add_argument("--skip-tf-conversion", action="store_true", help="Skip ONNX→TF step (use existing SavedModel)")
-    parser.add_argument("--tf-saved-model-dir", type=Path, help="Path for intermediate TF SavedModel")
+    parser.add_argument(
+        "--skip-tf-conversion",
+        action="store_true",
+        help="Skip ONNX→TF step (use existing SavedModel)",
+    )
+    parser.add_argument(
+        "--tf-saved-model-dir", type=Path, help="Path for intermediate TF SavedModel"
+    )
     parser.add_argument("--validate", action="store_true", help="Run validation after conversion")
     args = parser.parse_args()
 
@@ -136,7 +146,9 @@ def main() -> None:
     if not args.skip_tf_conversion:
         convert_onnx_to_tf(args.input, tf_dir)
 
-    convert_tf_to_tflite(tf_dir, args.output, args.quantization, args.representative_dataset, args.optimize_for)
+    convert_tf_to_tflite(
+        tf_dir, args.output, args.quantization, args.representative_dataset, args.optimize_for
+    )
 
     if args.validate:
         validate_tflite(args.output)

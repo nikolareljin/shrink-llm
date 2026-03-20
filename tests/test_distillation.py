@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 import torch
 
 
@@ -51,7 +50,9 @@ class TestDistillationLoss:
     def test_hidden_alignment_loss(self):
         from scripts.distill import DistillationConfig, DistillationLoss
 
-        config = DistillationConfig(temperature=4.0, alpha=0.1, beta=0.9, gamma=0.5, align_hidden=True)
+        config = DistillationConfig(
+            temperature=4.0, alpha=0.1, beta=0.9, gamma=0.5, align_hidden=True
+        )
         loss_fn = DistillationLoss(config)
 
         batch, seq, vocab = 2, 10, 100

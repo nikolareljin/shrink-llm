@@ -25,7 +25,6 @@ def optimize_graph(
 ) -> None:
     """Apply ONNX Runtime graph optimizations for mobile."""
     import onnxruntime as ort
-    from onnxruntime.transformers import optimizer as transformers_optimizer
 
     log.info("Running ONNX graph optimization (level=%s, target=%s)...", optimization_level, target)
 
@@ -63,15 +62,16 @@ def convert_layout_to_nhwc(input_path: Path, output_path: Path) -> None:
         onnx.save(optimized, str(output_path))
         log.info("NHWC layout applied → %s", output_path)
     except ImportError:
-        log.warning("transpose_optimizer not available in your ORT version — skipping NHWC conversion")
+        log.warning(
+            "transpose_optimizer not available in your ORT version — skipping NHWC conversion"
+        )
         import shutil
+
         shutil.copy(str(input_path), str(output_path))
 
 
 def downgrade_opset(input_path: Path, output_path: Path, target_opset: int = 13) -> None:
     """Downgrade ONNX opset for compatibility with older mobile ORT versions."""
-    import onnxconverter_common as occ
-
     log.info("Downgrading opset to %d...", target_opset)
     model = onnx.load(str(input_path))
     downgraded = onnx.version_converter.convert_version(model, target_opset)
@@ -89,6 +89,7 @@ def generate_ort_model(input_path: Path, output_path: Path) -> None:
         ort_path = input_path.with_suffix(".ort")
         if ort_path.exists() and output_path != ort_path:
             import shutil
+
             shutil.copy(str(ort_path), str(output_path))
         log.info(".ort model → %s", output_path)
     except Exception as e:
@@ -107,7 +108,9 @@ def _log_size_comparison(before: Path, after: Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Optimize ONNX model for mobile ONNX Runtime")
     parser.add_argument("--input", required=True, type=Path, help="Input ONNX model path")
-    parser.add_argument("--output", required=True, type=Path, help="Output optimized ONNX model path")
+    parser.add_argument(
+        "--output", required=True, type=Path, help="Output optimized ONNX model path"
+    )
     parser.add_argument(
         "--optimization-level",
         default="extended",
@@ -151,7 +154,9 @@ def main() -> None:
         downgrade_opset(current_input, opset_path, args.downgrade_opset)
         current_input = opset_path
 
-    optimize_graph(current_input, args.output, args.optimization_level, args.target, args.enable_nhwc)
+    optimize_graph(
+        current_input, args.output, args.optimization_level, args.target, args.enable_nhwc
+    )
 
     if args.generate_ort:
         ort_output = args.output.with_suffix(".ort")

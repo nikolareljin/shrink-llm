@@ -17,7 +17,16 @@ import yaml
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger(__name__)
 
-VALID_STAGES = ["export", "quantize", "prune", "distill", "convert_tflite", "convert_coreml", "convert_onnx_mobile", "benchmark"]
+VALID_STAGES = [
+    "export",
+    "quantize",
+    "prune",
+    "distill",
+    "convert_tflite",
+    "convert_coreml",
+    "convert_onnx_mobile",
+    "benchmark",
+]
 
 
 def run_stage(script: str, args_list: list[str], dry_run: bool = False) -> bool:
@@ -47,19 +56,27 @@ def build_stage_args(stage: str, config: dict, output_dir: Path) -> list[str]:
 
     if stage == "export":
         return [
-            "--model", model_id,
-            "--task", task,
-            "--output", onnx_path,
-            "--opset", str(config.get("onnx_opset", 17)),
+            "--model",
+            model_id,
+            "--task",
+            task,
+            "--output",
+            onnx_path,
+            "--opset",
+            str(config.get("onnx_opset", 17)),
             "--validate",
         ]
     elif stage == "quantize":
         q = config.get("quantization", {})
         args = [
-            "--input", onnx_path,
-            "--output", quant_path,
-            "--precision", q.get("precision", "int8"),
-            "--mode", q.get("mode", "dynamic"),
+            "--input",
+            onnx_path,
+            "--output",
+            quant_path,
+            "--precision",
+            q.get("precision", "int8"),
+            "--mode",
+            q.get("mode", "dynamic"),
         ]
         if q.get("calibration_data"):
             args += ["--calibration-data", q["calibration_data"]]
@@ -68,13 +85,20 @@ def build_stage_args(stage: str, config: dict, output_dir: Path) -> list[str]:
         b = config.get("benchmark", {})
         result_name = f"{Path(model_id).name}_int8"
         return [
-            "--model", quant_path,
-            "--task", task,
-            "--runtime", b.get("runtime", "onnxruntime"),
-            "--warmup-runs", str(b.get("warmup_runs", 10)),
-            "--benchmark-runs", str(b.get("benchmark_runs", 100)),
-            "--output-json", str(output_dir / "benchmarks" / f"{result_name}.json"),
-            "--output-md", str(output_dir / "benchmarks" / f"{result_name}.md"),
+            "--model",
+            quant_path,
+            "--task",
+            task,
+            "--runtime",
+            b.get("runtime", "onnxruntime"),
+            "--warmup-runs",
+            str(b.get("warmup_runs", 10)),
+            "--benchmark-runs",
+            str(b.get("benchmark_runs", 100)),
+            "--output-json",
+            str(output_dir / "benchmarks" / f"{result_name}.json"),
+            "--output-md",
+            str(output_dir / "benchmarks" / f"{result_name}.md"),
         ]
     else:
         return []
@@ -88,7 +112,9 @@ def main() -> None:
         default=",".join(VALID_STAGES),
         help=f"Comma-separated stages to run (default: all). Options: {', '.join(VALID_STAGES)}",
     )
-    parser.add_argument("--output-dir", type=Path, default=Path("models/student"), help="Output directory")
+    parser.add_argument(
+        "--output-dir", type=Path, default=Path("models/student"), help="Output directory"
+    )
     parser.add_argument("--dry-run", action="store_true", help="Print commands without executing")
     args = parser.parse_args()
 
