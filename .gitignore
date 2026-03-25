@@ -82,3 +82,7 @@ htmlcov/
 # HuggingFace cache
 .cache/
 huggingface/
+
+# Ignore Claude memory files outside the repo root
+CLAUDE.md
+!/CLAUDE.md
