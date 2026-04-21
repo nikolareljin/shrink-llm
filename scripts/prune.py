@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import logging
 from pathlib import Path
+from typing import Any
 
 import torch
 import torch.nn as nn
@@ -138,6 +139,54 @@ class LayerDropper:
         return list(range(0, num_layers, 2))
 
 
+def _make_synthetic_dataloader(task: str, device: str) -> list[dict[str, Any]]:
+    """Return synthetic input batches for importance scoring without a real dataset."""
+    batches = []
+    for _ in range(64):
+        if task == "ocr":
+            batches.append({"pixel_values": torch.randn(1, 3, 384, 384, device=device)})
+        elif task == "legal":
+            batches.append({
+                "input_ids": torch.randint(0, 1000, (1, 128), device=device),
+                "attention_mask": torch.ones(1, 128, dtype=torch.long, device=device),
+            })
+        elif task == "audio":
+            batches.append({"input_values": torch.randn(1, 16000, device=device)})
+        else:
+            batches.append({
+                "input_ids": torch.randint(0, 1000, (1, 64), device=device),
+                "attention_mask": torch.ones(1, 64, dtype=torch.long, device=device),
+            })
+    return batches
+
+
+def _zero_attention_heads(model: nn.Module, layer_name: str, prune_indices: list[int]) -> None:
+    """Zero out Q/K/V weight slices corresponding to pruned attention heads."""
+    for name, module in model.named_modules():
+        if name != layer_name:
+            continue
+        if not hasattr(module, "num_heads"):
+            continue
+        num_heads: int = module.num_heads
+        head_dim: int | None = getattr(module, "head_dim", None)
+
+        for proj_attr in ("q_proj", "k_proj", "v_proj", "query", "key", "value"):
+            proj: nn.Linear | None = getattr(module, proj_attr, None)
+            if proj is None or not isinstance(proj, nn.Linear):
+                continue
+            out_features = proj.weight.shape[0]
+            if head_dim is None:
+                head_dim = out_features // num_heads
+            with torch.no_grad():
+                for idx in prune_indices:
+                    start = idx * head_dim
+                    end = start + head_dim
+                    proj.weight.data[start:end, :] = 0.0
+                    if proj.bias is not None:
+                        proj.bias.data[start:end] = 0.0
+        break
+
+
 def count_parameters(model: nn.Module) -> int:
     return sum(p.numel() for p in model.parameters())
 
@@ -146,7 +195,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Structured pruning for transformer models")
     parser.add_argument("--model", required=True, help="HuggingFace model ID or local path")
     parser.add_argument(
-        "--task", required=True, choices=["ocr", "legal", "baby_cry"], help="Task type"
+        "--task", required=True, choices=["ocr", "legal", "audio"], help="Task type"
     )
     parser.add_argument(
         "--method",
@@ -177,17 +226,42 @@ def main() -> None:
     before_params = count_parameters(model)
     log.info("Parameters before pruning: %s", f"{before_params:,}")
 
-    if args.method == "layers":
+    if args.method == "attention_heads":
+        scorer = HeadImportanceScorer(model)
+        synthetic_inputs = _make_synthetic_dataloader(args.task, args.device)
+        scores = scorer.score_heads(synthetic_inputs, num_batches=min(50, len(synthetic_inputs)))
+        if scores:
+            log.info("Head importance scores computed for %d attention layers", len(scores))
+            for layer_name, layer_scores in scores.items():
+                n_heads = len(layer_scores)
+                n_prune = max(1, int(n_heads * args.sparsity))
+                _, prune_indices = layer_scores.topk(n_prune, largest=False)
+                log.info("Layer %s: pruning %d/%d heads", layer_name, n_prune, n_heads)
+                _zero_attention_heads(model, layer_name, prune_indices.tolist())
+            log.info("Attention head pruning complete.")
+        else:
+            log.warning(
+                "No attention layers found via hooks — model may not expose attention weights. "
+                "Falling back to magnitude pruning."
+            )
+            for name, param in model.named_parameters():
+                if param.requires_grad and param.dim() >= 2:
+                    threshold = param.data.abs().quantile(args.sparsity)
+                    param.data[param.data.abs() < threshold] = 0.0
+
+    elif args.method == "layers":
         config = AutoConfig.from_pretrained(args.model)
         num_layers = getattr(config, "num_hidden_layers", getattr(config, "n_layer", 12))
         keep = LayerDropper.even_layer_selection(num_layers)
         model = LayerDropper.drop_layers(model, keep)
+
     elif args.method == "mlp":
-        # Synthetic dataloader for demonstration — replace with real dataset
         pruner = MLPPruner(model, sparsity=args.sparsity)
-        log.info("Collecting MLP activation statistics...")
-        # pruner.collect_activations(dataloader)  # inject real dataloader here
+        log.info("Collecting MLP activation statistics (synthetic data)...")
+        synthetic_inputs = _make_synthetic_dataloader(args.task, args.device)
+        pruner.collect_activations(synthetic_inputs)
         pruner.prune()
+
     elif args.method == "magnitude":
         for name, param in model.named_parameters():
             if param.requires_grad and param.dim() >= 2:
