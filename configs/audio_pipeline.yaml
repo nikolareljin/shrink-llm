@@ -1,7 +1,7 @@
-# Baby Cry Detection Pipeline Configuration — ShrinkLLM
+# Audio Classification Pipeline Configuration — ShrinkLLM
 # Teacher: Wav2Vec2-Large | Student: MobileNet Audio / AST-pruned
 
-task: baby_cry
+task: audio
 model: MIT/ast-finetuned-audioset-10-10-0.4593
 teacher: facebook/wav2vec2-large-960h
 
@@ -43,7 +43,7 @@ benchmark:
   runtime: onnxruntime
   warmup_runs: 20
   benchmark_runs: 200
-  dataset: datasets/baby_cry/eval/
+  dataset: datasets/audio/eval/
 
 success_criteria:
   min_accuracy: 0.88

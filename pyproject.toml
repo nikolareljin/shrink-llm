@@ -4,7 +4,7 @@ build-backend = "setuptools.backends.legacy:build"
 
 [project]
 name = "shrink-llm"
-version = "0.1.1"
+version = "0.2.0"
 description = "Compress AI models for efficient smartphone deployment"
 readme = "README.md"
 license = { text = "Apache-2.0" }

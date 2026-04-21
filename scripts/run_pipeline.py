@@ -7,9 +7,11 @@ Runs stages: export → quantize → prune → distill → convert → benchmark
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
@@ -51,57 +53,125 @@ def build_stage_args(stage: str, config: dict, output_dir: Path) -> list[str]:
     """Build CLI args for each stage from config."""
     model_id = config.get("model", "")
     task = config.get("task", "")
-    onnx_path = str(output_dir / f"{Path(model_id).name}_base.onnx")
-    quant_path = str(output_dir / f"{Path(model_id).name}_int8.onnx")
+    model_stem = Path(model_id).name if model_id else "model"
+    onnx_path = str(output_dir / f"{model_stem}_base.onnx")
+    quant_path = str(output_dir / f"{model_stem}_int8.onnx")
 
     if stage == "export":
         return [
-            "--model",
-            model_id,
-            "--task",
-            task,
-            "--output",
-            onnx_path,
-            "--opset",
-            str(config.get("onnx_opset", 17)),
+            "--model", model_id,
+            "--task", task,
+            "--output", onnx_path,
+            "--opset", str(config.get("onnx_opset", 17)),
             "--validate",
         ]
+
     elif stage == "quantize":
         q = config.get("quantization", {})
         args = [
-            "--input",
-            onnx_path,
-            "--output",
-            quant_path,
-            "--precision",
-            q.get("precision", "int8"),
-            "--mode",
-            q.get("mode", "dynamic"),
+            "--input", onnx_path,
+            "--output", quant_path,
+            "--precision", q.get("precision", "int8"),
+            "--mode", q.get("mode", "dynamic"),
         ]
         if q.get("calibration_data"):
             args += ["--calibration-data", q["calibration_data"]]
+        if q.get("calibration_samples"):
+            args += ["--calibration-samples", str(q["calibration_samples"])]
         return args
+
+    elif stage == "prune":
+        p = config.get("pruning", {})
+        return [
+            "--model", model_id,
+            "--task", task,
+            "--method", p.get("method", "magnitude"),
+            "--sparsity", str(p.get("sparsity", 0.3)),
+            "--output-dir", str(output_dir / "pruned"),
+            "--finetune-epochs", str(p.get("finetune_epochs", 0)),
+        ]
+
+    elif stage == "distill":
+        d = config.get("distillation", {})
+        teacher = config.get("teacher", "")
+        if not teacher:
+            log.warning("Distill stage requested but 'teacher' not set in config — skipping")
+            return []
+        args = [
+            "--teacher", teacher,
+            "--student", model_id,
+            "--task", task,
+            "--dataset", str(d.get("dataset", "datasets/train")),
+            "--output-dir", str(output_dir / "distilled"),
+            "--temperature", str(d.get("temperature", 6.0)),
+            "--alpha", str(d.get("alpha", 0.1)),
+            "--beta", str(d.get("beta", 0.9)),
+            "--epochs", str(d.get("epochs", 10)),
+            "--batch-size", str(d.get("batch_size", 16)),
+            "--lr", str(d.get("lr", 5e-5)),
+        ]
+        if d.get("fp16"):
+            args.append("--fp16")
+        return args
+
+    elif stage == "convert_tflite":
+        m = config.get("mobile", {}).get("android", {})
+        return [
+            "--input", quant_path,
+            "--output", str(output_dir / f"{model_stem}.tflite"),
+            "--quantization", m.get("quantization", "int8"),
+        ]
+
+    elif stage == "convert_coreml":
+        m = config.get("mobile", {}).get("ios", {})
+        return [
+            "--input", quant_path,
+            "--output", str(output_dir / f"{model_stem}.mlpackage"),
+            "--deployment-target", m.get("deployment_target", "iOS16"),
+            "--compute-units", m.get("compute_units", "ALL"),
+        ]
+
+    elif stage == "convert_onnx_mobile":
+        return [
+            "--input", quant_path,
+            "--output", str(output_dir / f"{model_stem}_mobile.onnx"),
+        ]
+
     elif stage == "benchmark":
         b = config.get("benchmark", {})
-        result_name = f"{Path(model_id).name}_int8"
-        return [
-            "--model",
-            quant_path,
-            "--task",
-            task,
-            "--runtime",
-            b.get("runtime", "onnxruntime"),
-            "--warmup-runs",
-            str(b.get("warmup_runs", 10)),
-            "--benchmark-runs",
-            str(b.get("benchmark_runs", 100)),
-            "--output-json",
-            str(output_dir / "benchmarks" / f"{result_name}.json"),
-            "--output-md",
-            str(output_dir / "benchmarks" / f"{result_name}.md"),
+        result_name = f"{model_stem}_int8"
+        args = [
+            "--model", quant_path,
+            "--task", task,
+            "--runtime", b.get("runtime", "onnxruntime"),
+            "--warmup-runs", str(b.get("warmup_runs", 10)),
+            "--benchmark-runs", str(b.get("benchmark_runs", 100)),
+            "--output-json", str(output_dir / "benchmarks" / f"{result_name}.json"),
+            "--output-md", str(output_dir / "benchmarks" / f"{result_name}.md"),
         ]
-    else:
-        return []
+        if b.get("dataset"):
+            args += ["--dataset", b["dataset"]]
+        return args
+
+    return []
+
+
+def _update_manifest(manifest_path: Path, stage: str, args_list: list[str], success: bool) -> None:
+    """Append a stage record to the pipeline manifest JSON."""
+    record: dict = {
+        "stage": stage,
+        "args": args_list,
+        "status": "ok" if success else "failed",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    existing: dict = {"stages": []}
+    if manifest_path.exists():
+        try:
+            existing = json.loads(manifest_path.read_text())
+        except Exception:
+            pass
+    existing.setdefault("stages", []).append(record)
+    manifest_path.write_text(json.dumps(existing, indent=2))
 
 
 def main() -> None:
@@ -137,14 +207,20 @@ def main() -> None:
         "benchmark": "benchmark",
     }
 
+    manifest_path = args.output_dir / "manifest.json"
     results = {}
     for stage in stages:
         if stage not in VALID_STAGES:
             log.warning("Unknown stage '%s' — skipping", stage)
             continue
         stage_args = build_stage_args(stage, config, args.output_dir)
+        if not stage_args and stage not in ("export",):
+            log.warning("Stage '%s' produced no args — skipping", stage)
+            continue
         success = run_stage(script_map[stage], stage_args, dry_run=args.dry_run)
         results[stage] = "OK" if success else "FAILED"
+        if not args.dry_run:
+            _update_manifest(manifest_path, stage, stage_args, success)
         if not success:
             log.error("Pipeline aborted at stage '%s'", stage)
             break
@@ -153,6 +229,9 @@ def main() -> None:
     for stage, status in results.items():
         symbol = "✓" if status == "OK" else "✗"
         log.info("  %s %s: %s", symbol, stage, status)
+
+    if not args.dry_run and manifest_path.exists():
+        log.info("Manifest written to %s", manifest_path)
 
 
 if __name__ == "__main__":
