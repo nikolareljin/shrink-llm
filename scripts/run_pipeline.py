@@ -31,6 +31,14 @@ VALID_STAGES = [
     "benchmark",
 ]
 
+STAGE_PREREQUISITES = {
+    "quantize": {"export"},
+    "convert_tflite": {"export"},
+    "convert_coreml": {"export"},
+    "convert_onnx_mobile": {"export"},
+    "benchmark": {"export"},
+}
+
 
 def run_stage(script: str, args_list: list[str], dry_run: bool = False) -> bool:
     cmd = [sys.executable, f"scripts/{script}.py"] + args_list
@@ -55,10 +63,48 @@ def order_stages(requested_stages: Iterable[str]) -> list[str]:
     return [stage for stage in VALID_STAGES if stage in requested]
 
 
-def _quantized_artifact_info(config: dict, output_dir: Path, model_label: str) -> tuple[Path, str]:
+def validate_stage_selection(stages: Iterable[str]) -> None:
+    selected = set(stages)
+    for stage in stages:
+        missing = sorted(STAGE_PREREQUISITES.get(stage, set()) - selected)
+        if missing:
+            missing_list = ", ".join(missing)
+            raise ValueError(f"Stage '{stage}' requires stage(s): {missing_list}")
+
+
+def _validated_quantization_settings(config: dict) -> tuple[str, str]:
     q = config.get("quantization", {})
     precision = str(q.get("precision", "int8")).lower()
     mode = str(q.get("mode", "dynamic")).lower()
+    supported_modes = {"dynamic", "static", "gptq"}
+    supported_precisions = {"int8", "fp16"}
+    gptq_precisions = {"int4", "mixed", "int8", "fp16"}
+
+    if mode not in supported_modes:
+        supported_modes_list = ", ".join(sorted(supported_modes))
+        raise ValueError(
+            f"Unsupported quantization mode '{mode}'. Supported modes: {supported_modes_list}."
+        )
+
+    if mode == "gptq":
+        if precision not in gptq_precisions:
+            supported_precisions_list = ", ".join(sorted(gptq_precisions))
+            raise ValueError(
+                f"Unsupported precision '{precision}' for mode '{mode}'. "
+                f"Supported precisions for gptq: {supported_precisions_list}."
+            )
+    elif precision not in supported_precisions:
+        supported_precisions_list = ", ".join(sorted(supported_precisions))
+        raise ValueError(
+            f"Unsupported precision '{precision}' for mode '{mode}'. "
+            f"Use one of: {supported_precisions_list}."
+        )
+
+    return mode, precision
+
+
+def _quantized_artifact_info(config: dict, output_dir: Path, model_label: str) -> tuple[Path, str]:
+    mode, precision = _validated_quantization_settings(config)
     if mode == "gptq":
         raise ValueError(
             "quantization.mode='gptq' is not supported by run_pipeline.py: "
@@ -154,8 +200,7 @@ def build_stage_args(
 
     elif stage == "quantize":
         q = config.get("quantization", {})
-        mode = str(q.get("mode", "dynamic")).lower()
-        precision = str(q.get("precision", "int8")).lower()
+        mode, precision = _validated_quantization_settings(config)
         args = [
             "--input",
             onnx_path,
@@ -344,6 +389,10 @@ def main() -> None:
 
     requested_stages = [s.strip() for s in args.stages.split(",")]
     stages = order_stages(requested_stages)
+    try:
+        validate_stage_selection(stages)
+    except ValueError as exc:
+        parser.error(str(exc))
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     log.info("Pipeline config: %s", args.config)

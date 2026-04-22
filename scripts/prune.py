@@ -39,7 +39,9 @@ class HeadImportanceScorer:
     def _make_hook(self, name: str):
         def hook(module, input, output):
             attn_weights = None
-            if isinstance(output, tuple) and len(output) > 1:
+            if isinstance(output, torch.Tensor):
+                attn_weights = output
+            elif isinstance(output, tuple) and len(output) > 1:
                 attn_weights = output[1]
             if not isinstance(attn_weights, torch.Tensor):
                 return

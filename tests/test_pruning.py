@@ -135,6 +135,33 @@ class TestHeadImportanceScorer:
         assert "attention" in scores
         assert torch.allclose(scores["attention"], torch.ones(2))
 
+    def test_score_heads_accepts_tensor_attention_outputs(self):
+        from scripts.prune import HeadImportanceScorer
+
+        class FakeAttention(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.num_heads = 2
+
+            def forward(self, input_ids=None, output_attentions=False, **kwargs):
+                return torch.ones(1, self.num_heads, 4, 4)
+
+        class FakeModel(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.attention = FakeAttention()
+
+            def forward(self, **kwargs):
+                return self.attention(**kwargs)
+
+        scorer = HeadImportanceScorer(FakeModel())
+        scores = scorer.score_heads(
+            [{"input_ids": torch.ones(1, 4, dtype=torch.long)}], num_batches=1
+        )
+
+        assert "attention" in scores
+        assert torch.allclose(scores["attention"], torch.ones(2))
+
 
 class TestZeroAttentionHeads:
     def test_skips_invalid_projection_shapes(self):

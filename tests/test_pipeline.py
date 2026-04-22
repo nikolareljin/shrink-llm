@@ -42,6 +42,12 @@ class TestOrderStages:
         stages = order_stages(["benchmark", "quantize", "prune", "export"])
         assert stages == ["prune", "export", "quantize", "benchmark"]
 
+    def test_validate_stage_selection_requires_export(self):
+        from scripts.run_pipeline import validate_stage_selection
+
+        with pytest.raises(ValueError, match="requires stage\\(s\\): export"):
+            validate_stage_selection(["prune", "convert_coreml"])
+
 
 class TestPipelineState:
     def test_prune_updates_export_model_path(self, tmp_path):
@@ -90,6 +96,15 @@ class TestBuildStageArgs:
         config["quantization"] = {"precision": "int4", "mode": "gptq"}
 
         with pytest.raises(ValueError, match="gptq"):
+            init_pipeline_state(config, tmp_path)
+
+    def test_init_pipeline_state_rejects_unsupported_precision_for_dynamic_mode(self, tmp_path):
+        from scripts.run_pipeline import init_pipeline_state
+
+        config = _base_config()
+        config["quantization"] = {"precision": "int4", "mode": "dynamic"}
+
+        with pytest.raises(ValueError, match="Unsupported precision 'int4'"):
             init_pipeline_state(config, tmp_path)
 
     def test_distill_forwards_gamma_and_align_hidden(self, tmp_path):
