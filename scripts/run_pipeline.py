@@ -80,7 +80,12 @@ def init_pipeline_state(config: dict, output_dir: Path) -> dict[str, Path | str]
         "quant_path": quant_path,
         "quant_label": quant_label,
         "current_onnx_path": onnx_path,
+        "current_onnx_label": onnx_path.stem,
     }
+
+
+def _has_model_artifacts(model_dir: Path) -> bool:
+    return any((model_dir / name).exists() for name in ("config.json", "tokenizer_config.json"))
 
 
 def update_pipeline_state(
@@ -88,6 +93,7 @@ def update_pipeline_state(
 ) -> None:
     if stage == "quantize":
         state["current_onnx_path"] = state["quant_path"]
+        state["current_onnx_label"] = state["quant_label"]
         return
 
     if stage not in {"prune", "distill"}:
@@ -95,6 +101,14 @@ def update_pipeline_state(
 
     suffix = "pruned" if stage == "prune" else "distilled"
     stage_output = output_dir / suffix
+    if stage == "distill" and not _has_model_artifacts(stage_output):
+        log.warning(
+            "Stage '%s' did not produce reusable model artifacts in %s; keeping current model state.",
+            stage,
+            stage_output,
+        )
+        return
+
     model_label = f"{state['model_label']}_{suffix}"
     onnx_path = output_dir / f"{model_label}_base.onnx"
     quant_path, quant_label = _quantized_artifact_info(config, output_dir, model_label)
@@ -106,6 +120,7 @@ def update_pipeline_state(
             "quant_path": quant_path,
             "quant_label": quant_label,
             "current_onnx_path": onnx_path,
+            "current_onnx_label": onnx_path.stem,
         }
     )
 
@@ -264,7 +279,7 @@ def build_stage_args(
 
     elif stage == "benchmark":
         b = config.get("benchmark", {})
-        result_name = str(state["quant_label"])
+        result_name = str(state.get("current_onnx_label", Path(current_onnx_input).stem))
         args = [
             "--model",
             current_onnx_input,

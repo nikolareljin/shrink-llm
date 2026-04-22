@@ -59,6 +59,17 @@ class TestPipelineState:
         assert args[1] == str(tmp_path / "pruned")
         assert args[5] == str(tmp_path / "demo-model_pruned_base.onnx")
 
+    def test_distill_without_saved_artifacts_keeps_current_state(self, tmp_path):
+        from scripts.run_pipeline import init_pipeline_state, update_pipeline_state
+
+        config = _base_config()
+        state = init_pipeline_state(config, tmp_path)
+        original_state = dict(state)
+
+        update_pipeline_state("distill", state, config, tmp_path)
+
+        assert state == original_state
+
 
 class TestBuildStageArgs:
     def test_quantize_static_uses_dataset_fallback_and_skip_ops(self, tmp_path):
@@ -128,3 +139,19 @@ class TestBuildStageArgs:
 
         args = build_stage_args("benchmark", config, tmp_path, state)
         assert args[args.index("--model") + 1] == str(tmp_path / "demo-model_base.onnx")
+        assert args[args.index("--output-json") + 1].endswith("demo-model_base.json")
+
+    def test_benchmark_uses_quantized_label_after_quantize(self, tmp_path):
+        from scripts.run_pipeline import (
+            build_stage_args,
+            init_pipeline_state,
+            update_pipeline_state,
+        )
+
+        config = _base_config()
+        state = init_pipeline_state(config, tmp_path)
+
+        update_pipeline_state("quantize", state, config, tmp_path)
+
+        args = build_stage_args("benchmark", config, tmp_path, state)
+        assert args[args.index("--output-json") + 1].endswith("demo-model_int8.json")
