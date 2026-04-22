@@ -11,6 +11,7 @@ import json
 import logging
 import subprocess
 import sys
+from collections.abc import Iterable
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -20,10 +21,10 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 log = logging.getLogger(__name__)
 
 VALID_STAGES = [
-    "export",
-    "quantize",
     "prune",
     "distill",
+    "export",
+    "quantize",
     "convert_tflite",
     "convert_coreml",
     "convert_onnx_mobile",
@@ -49,13 +50,64 @@ def load_config(config_path: Path) -> dict:
         return yaml.safe_load(f)
 
 
-def build_stage_args(stage: str, config: dict, output_dir: Path) -> list[str]:
+def order_stages(requested_stages: Iterable[str]) -> list[str]:
+    requested = {stage.strip() for stage in requested_stages if stage.strip()}
+    return [stage for stage in VALID_STAGES if stage in requested]
+
+
+def _quantized_artifact_info(config: dict, output_dir: Path, model_label: str) -> tuple[Path, str]:
+    q = config.get("quantization", {})
+    precision = str(q.get("precision", "int8")).lower()
+    mode = str(q.get("mode", "dynamic")).lower()
+    if mode == "gptq":
+        return output_dir / f"{model_label}_gptq", f"{model_label}_gptq"
+    return output_dir / f"{model_label}_{precision}.onnx", f"{model_label}_{precision}"
+
+
+def init_pipeline_state(config: dict, output_dir: Path) -> dict[str, Path | str]:
+    model_id = str(config.get("model", ""))
+    model_label = Path(model_id).name if model_id else "model"
+    quant_path, quant_label = _quantized_artifact_info(config, output_dir, model_label)
+    return {
+        "model_id": model_id,
+        "model_label": model_label,
+        "onnx_path": output_dir / f"{model_label}_base.onnx",
+        "quant_path": quant_path,
+        "quant_label": quant_label,
+    }
+
+
+def update_pipeline_state(stage: str, state: dict[str, Path | str], config: dict, output_dir: Path) -> None:
+    if stage not in {"prune", "distill"}:
+        return
+
+    suffix = "pruned" if stage == "prune" else "distilled"
+    stage_output = output_dir / suffix
+    model_label = f"{state['model_label']}_{suffix}"
+    quant_path, quant_label = _quantized_artifact_info(config, output_dir, model_label)
+    state.update(
+        {
+            "model_id": str(stage_output),
+            "model_label": model_label,
+            "onnx_path": output_dir / f"{model_label}_base.onnx",
+            "quant_path": quant_path,
+            "quant_label": quant_label,
+        }
+    )
+
+
+def build_stage_args(
+    stage: str,
+    config: dict,
+    output_dir: Path,
+    state: dict[str, Path | str],
+) -> list[str]:
     """Build CLI args for each stage from config."""
-    model_id = config.get("model", "")
+    model_id = str(state["model_id"])
     task = config.get("task", "")
-    model_stem = Path(model_id).name if model_id else "model"
-    onnx_path = str(output_dir / f"{model_stem}_base.onnx")
-    quant_path = str(output_dir / f"{model_stem}_int8.onnx")
+    model_label = str(state["model_label"])
+    onnx_path = str(state["onnx_path"])
+    quant_path = str(state["quant_path"])
 
     if stage == "export":
         return [
@@ -72,20 +124,37 @@ def build_stage_args(stage: str, config: dict, output_dir: Path) -> list[str]:
 
     elif stage == "quantize":
         q = config.get("quantization", {})
+        mode = str(q.get("mode", "dynamic")).lower()
+        precision = str(q.get("precision", "int8")).lower()
         args = [
             "--input",
             onnx_path,
             "--output",
             quant_path,
             "--precision",
-            q.get("precision", "int8"),
+            precision,
             "--mode",
-            q.get("mode", "dynamic"),
+            mode,
         ]
-        if q.get("calibration_data"):
-            args += ["--calibration-data", q["calibration_data"]]
+        if mode == "static":
+            calibration_data = (
+                q.get("calibration_data")
+                or config.get("benchmark", {}).get("dataset")
+                or f"datasets/{task}"
+            )
+            args += ["--calibration-data", str(calibration_data)]
         if q.get("calibration_samples"):
             args += ["--calibration-samples", str(q["calibration_samples"])]
+        skip_ops = q.get("skip_ops")
+        if skip_ops:
+            if isinstance(skip_ops, list):
+                skip_ops = ",".join(str(op) for op in skip_ops)
+            else:
+                skip_ops = str(skip_ops)
+            if skip_ops:
+                args += ["--skip-ops", skip_ops]
+        if mode == "gptq":
+            args += ["--model-id", model_id]
         return args
 
     elif stage == "prune":
@@ -109,7 +178,10 @@ def build_stage_args(stage: str, config: dict, output_dir: Path) -> list[str]:
         d = config.get("distillation", {})
         teacher = config.get("teacher", "")
         if not teacher:
-            log.warning("Distill stage requested but 'teacher' not set in config — skipping")
+            log.warning("Distill stage requested but 'teacher' not set in config, skipping")
+            return []
+        if task != "legal":
+            log.warning("Distill stage supports only task='legal', skipping task='%s'", task)
             return []
         args = [
             "--teacher",
@@ -128,6 +200,8 @@ def build_stage_args(stage: str, config: dict, output_dir: Path) -> list[str]:
             str(d.get("alpha", 0.1)),
             "--beta",
             str(d.get("beta", 0.9)),
+            "--gamma",
+            str(d.get("gamma", 0.1)),
             "--epochs",
             str(d.get("epochs", 10)),
             "--batch-size",
@@ -135,6 +209,8 @@ def build_stage_args(stage: str, config: dict, output_dir: Path) -> list[str]:
             "--lr",
             str(d.get("lr", 5e-5)),
         ]
+        if d.get("align_hidden"):
+            args.append("--align-hidden")
         if d.get("fp16"):
             args.append("--fp16")
         return args
@@ -145,7 +221,7 @@ def build_stage_args(stage: str, config: dict, output_dir: Path) -> list[str]:
             "--input",
             quant_path,
             "--output",
-            str(output_dir / f"{model_stem}.tflite"),
+            str(output_dir / f"{model_label}.tflite"),
             "--quantization",
             m.get("quantization", "int8"),
         ]
@@ -156,11 +232,13 @@ def build_stage_args(stage: str, config: dict, output_dir: Path) -> list[str]:
             "--input",
             quant_path,
             "--output",
-            str(output_dir / f"{model_stem}.mlpackage"),
+            str(output_dir / f"{model_label}.mlpackage"),
             "--minimum-deployment-target",
             m.get("deployment_target", "iOS16"),
             "--compute-units",
             m.get("compute_units", "ALL"),
+            "--quantization",
+            m.get("quantization", "none"),
         ]
 
     elif stage == "convert_onnx_mobile":
@@ -168,12 +246,12 @@ def build_stage_args(stage: str, config: dict, output_dir: Path) -> list[str]:
             "--input",
             quant_path,
             "--output",
-            str(output_dir / f"{model_stem}_mobile.onnx"),
+            str(output_dir / f"{model_label}_mobile.onnx"),
         ]
 
     elif stage == "benchmark":
         b = config.get("benchmark", {})
-        result_name = f"{model_stem}_int8"
+        result_name = str(state["quant_label"])
         args = [
             "--model",
             quant_path,
@@ -236,7 +314,8 @@ def main() -> None:
     if not config.get("task"):
         parser.error("Config must specify a non-empty 'task' field")
 
-    stages = [s.strip() for s in args.stages.split(",")]
+    requested_stages = [s.strip() for s in args.stages.split(",")]
+    stages = order_stages(requested_stages)
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     log.info("Pipeline config: %s", args.config)
@@ -255,19 +334,23 @@ def main() -> None:
     }
 
     manifest_path = args.output_dir / "manifest.json"
+    state = init_pipeline_state(config, args.output_dir)
     results = {}
+    unknown_stages = [stage for stage in requested_stages if stage and stage not in VALID_STAGES]
+    for stage in unknown_stages:
+        log.warning("Unknown stage '%s' — skipping", stage)
+
     for stage in stages:
-        if stage not in VALID_STAGES:
-            log.warning("Unknown stage '%s' — skipping", stage)
-            continue
-        stage_args = build_stage_args(stage, config, args.output_dir)
+        stage_args = build_stage_args(stage, config, args.output_dir, state)
         if not stage_args and stage not in ("export",):
-            log.warning("Stage '%s' produced no args — skipping", stage)
+            log.warning("Stage '%s' produced no args, skipping", stage)
             continue
         success = run_stage(script_map[stage], stage_args, dry_run=args.dry_run)
         results[stage] = "OK" if success else "FAILED"
         if not args.dry_run:
             _update_manifest(manifest_path, stage, stage_args, success)
+        if success:
+            update_pipeline_state(stage, state, config, args.output_dir)
         if not success:
             log.error("Pipeline aborted at stage '%s'", stage)
             break
