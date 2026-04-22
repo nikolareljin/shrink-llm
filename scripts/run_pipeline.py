@@ -1,7 +1,7 @@
 """
 run_pipeline.py — Orchestrate the full ShrinkLLM compression pipeline from a YAML config.
 
-Runs stages: export → quantize → prune → distill → convert → benchmark
+Runs stages: prune → distill → export → quantize → convert → benchmark
 """
 
 from __future__ import annotations
@@ -71,33 +71,41 @@ def _quantized_artifact_info(config: dict, output_dir: Path, model_label: str) -
 def init_pipeline_state(config: dict, output_dir: Path) -> dict[str, Path | str]:
     model_id = str(config.get("model", ""))
     model_label = Path(model_id).name if model_id else "model"
+    onnx_path = output_dir / f"{model_label}_base.onnx"
     quant_path, quant_label = _quantized_artifact_info(config, output_dir, model_label)
     return {
         "model_id": model_id,
         "model_label": model_label,
-        "onnx_path": output_dir / f"{model_label}_base.onnx",
+        "onnx_path": onnx_path,
         "quant_path": quant_path,
         "quant_label": quant_label,
+        "current_onnx_path": onnx_path,
     }
 
 
 def update_pipeline_state(
     stage: str, state: dict[str, Path | str], config: dict, output_dir: Path
 ) -> None:
+    if stage == "quantize":
+        state["current_onnx_path"] = state["quant_path"]
+        return
+
     if stage not in {"prune", "distill"}:
         return
 
     suffix = "pruned" if stage == "prune" else "distilled"
     stage_output = output_dir / suffix
     model_label = f"{state['model_label']}_{suffix}"
+    onnx_path = output_dir / f"{model_label}_base.onnx"
     quant_path, quant_label = _quantized_artifact_info(config, output_dir, model_label)
     state.update(
         {
             "model_id": str(stage_output),
             "model_label": model_label,
-            "onnx_path": output_dir / f"{model_label}_base.onnx",
+            "onnx_path": onnx_path,
             "quant_path": quant_path,
             "quant_label": quant_label,
+            "current_onnx_path": onnx_path,
         }
     )
 
@@ -114,6 +122,7 @@ def build_stage_args(
     model_label = str(state["model_label"])
     onnx_path = str(state["onnx_path"])
     quant_path = str(state["quant_path"])
+    current_onnx_input = str(state.get("current_onnx_path", state["onnx_path"]))
 
     if stage == "export":
         return [
@@ -159,8 +168,6 @@ def build_stage_args(
                 skip_ops = str(skip_ops)
             if skip_ops:
                 args += ["--skip-ops", skip_ops]
-        if mode == "gptq":
-            args += ["--model-id", model_id]
         return args
 
     elif stage == "prune":
@@ -225,7 +232,7 @@ def build_stage_args(
         m = config.get("mobile", {}).get("android", {})
         return [
             "--input",
-            quant_path,
+            current_onnx_input,
             "--output",
             str(output_dir / f"{model_label}.tflite"),
             "--quantization",
@@ -236,7 +243,7 @@ def build_stage_args(
         m = config.get("mobile", {}).get("ios", {})
         return [
             "--input",
-            quant_path,
+            current_onnx_input,
             "--output",
             str(output_dir / f"{model_label}.mlpackage"),
             "--minimum-deployment-target",
@@ -250,7 +257,7 @@ def build_stage_args(
     elif stage == "convert_onnx_mobile":
         return [
             "--input",
-            quant_path,
+            current_onnx_input,
             "--output",
             str(output_dir / f"{model_label}_mobile.onnx"),
         ]
@@ -260,7 +267,7 @@ def build_stage_args(
         result_name = str(state["quant_label"])
         args = [
             "--model",
-            quant_path,
+            current_onnx_input,
             "--task",
             task,
             "--runtime",

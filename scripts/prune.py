@@ -29,7 +29,10 @@ class HeadImportanceScorer:
 
     def register_hooks(self) -> None:
         for name, module in self.model.named_modules():
-            if "attention" in name.lower() and hasattr(module, "num_heads"):
+            name_lower = name.lower()
+            if any(token in name_lower for token in ("attention", "attn")) and hasattr(
+                module, "num_heads"
+            ):
                 hook = module.register_forward_hook(self._make_hook(name))
                 self._hooks.append(hook)
 
@@ -186,6 +189,9 @@ def _zero_attention_heads(model: nn.Module, layer_name: str, prune_indices: list
             continue
         num_heads: int = module.num_heads
         head_dim: int | None = getattr(module, "head_dim", None)
+        if num_heads <= 0:
+            log.warning("Layer %s: invalid num_heads=%s; skipping head pruning.", layer_name, num_heads)
+            break
 
         zeroed_any = False
         for proj_attr in ("q_proj", "k_proj", "v_proj", "query", "key", "value"):
@@ -193,12 +199,57 @@ def _zero_attention_heads(model: nn.Module, layer_name: str, prune_indices: list
             if proj is None or not isinstance(proj, nn.Linear):
                 continue
             out_features = proj.weight.shape[0]
-            if head_dim is None:
-                head_dim = out_features // num_heads
+            if head_dim is not None:
+                if head_dim <= 0:
+                    log.warning(
+                        "Layer %s projection %s: invalid head_dim=%s; skipping projection.",
+                        layer_name,
+                        proj_attr,
+                        head_dim,
+                    )
+                    continue
+                expected_out_features = num_heads * head_dim
+                if out_features != expected_out_features:
+                    log.warning(
+                        "Layer %s projection %s: out_features=%s is inconsistent with "
+                        "num_heads=%s and head_dim=%s; skipping projection.",
+                        layer_name,
+                        proj_attr,
+                        out_features,
+                        num_heads,
+                        head_dim,
+                    )
+                    continue
+                proj_head_dim = head_dim
+            else:
+                if out_features % num_heads != 0:
+                    log.warning(
+                        "Layer %s projection %s: out_features=%s is not divisible by "
+                        "num_heads=%s; skipping projection.",
+                        layer_name,
+                        proj_attr,
+                        out_features,
+                        num_heads,
+                    )
+                    continue
+                proj_head_dim = out_features // num_heads
+
+            invalid_indices = [idx for idx in prune_indices if idx < 0 or idx >= num_heads]
+            if invalid_indices:
+                log.warning(
+                    "Layer %s projection %s: prune indices %s are out of range for num_heads=%s; "
+                    "skipping projection.",
+                    layer_name,
+                    proj_attr,
+                    invalid_indices,
+                    num_heads,
+                )
+                continue
+
             with torch.no_grad():
                 for idx in prune_indices:
-                    start = idx * head_dim
-                    end = start + head_dim
+                    start = idx * proj_head_dim
+                    end = start + proj_head_dim
                     proj.weight.data[start:end, :] = 0.0
                     if proj.bias is not None:
                         proj.bias.data[start:end] = 0.0
@@ -278,10 +329,11 @@ def main() -> None:
             log.info("Head importance scores computed for %d attention layers", len(scores))
             for layer_name, layer_scores in scores.items():
                 n_heads = len(layer_scores)
-                n_prune = max(1, int(n_heads * args.sparsity))
-                _, prune_indices = layer_scores.topk(n_prune, largest=False)
+                n_prune = min(n_heads, max(0, int(n_heads * args.sparsity)))
                 log.info("Layer %s: pruning %d/%d heads", layer_name, n_prune, n_heads)
-                _zero_attention_heads(model, layer_name, prune_indices.tolist())
+                if n_prune > 0:
+                    _, prune_indices = layer_scores.topk(n_prune, largest=False)
+                    _zero_attention_heads(model, layer_name, prune_indices.tolist())
             log.info("Attention head pruning complete.")
         else:
             log.warning(

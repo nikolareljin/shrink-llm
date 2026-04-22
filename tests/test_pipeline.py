@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 
 def _base_config() -> dict:
     return {
@@ -72,17 +74,14 @@ class TestBuildStageArgs:
         assert args[args.index("--calibration-data") + 1] == "datasets/legal/eval"
         assert args[args.index("--skip-ops") + 1] == "Softmax,LayerNormalization"
 
-    def test_quantize_gptq_passes_model_id(self, tmp_path):
-        from scripts.run_pipeline import build_stage_args, init_pipeline_state
+    def test_init_pipeline_state_rejects_gptq(self, tmp_path):
+        from scripts.run_pipeline import init_pipeline_state
 
         config = _base_config()
         config["quantization"] = {"precision": "int4", "mode": "gptq"}
-        state = init_pipeline_state(config, tmp_path)
 
-        args = build_stage_args("quantize", config, tmp_path, state)
-        assert args[args.index("--mode") + 1] == "gptq"
-        assert args[args.index("--model-id") + 1] == "org/demo-model"
-        assert Path(args[args.index("--output") + 1]).name == "demo-model_gptq"
+        with pytest.raises(ValueError, match="gptq"):
+            init_pipeline_state(config, tmp_path)
 
     def test_distill_forwards_gamma_and_align_hidden(self, tmp_path):
         from scripts.run_pipeline import build_stage_args, init_pipeline_state
@@ -111,3 +110,23 @@ class TestBuildStageArgs:
 
         args = build_stage_args("convert_coreml", config, tmp_path, state)
         assert args[args.index("--quantization") + 1] == "fp16"
+
+    def test_convert_coreml_falls_back_to_exported_onnx_without_quantize(self, tmp_path):
+        from scripts.run_pipeline import build_stage_args, init_pipeline_state
+
+        config = _base_config()
+        config.pop("quantization")
+        state = init_pipeline_state(config, tmp_path)
+
+        args = build_stage_args("convert_coreml", config, tmp_path, state)
+        assert args[args.index("--input") + 1] == str(tmp_path / "demo-model_base.onnx")
+
+    def test_benchmark_falls_back_to_exported_onnx_without_quantize(self, tmp_path):
+        from scripts.run_pipeline import build_stage_args, init_pipeline_state
+
+        config = _base_config()
+        config.pop("quantization")
+        state = init_pipeline_state(config, tmp_path)
+
+        args = build_stage_args("benchmark", config, tmp_path, state)
+        assert args[args.index("--model") + 1] == str(tmp_path / "demo-model_base.onnx")
