@@ -416,7 +416,7 @@ python prune.py \
 python distill.py \
   --teacher <hf_model_id_or_path> \
   --student <hf_model_id_or_path> \
-  --task <ocr|legal|audio> \
+  --task <legal> \
   --dataset <path/to/dataset/> \
   --output-dir <models/student/distilled/> \
   --temperature 6.0 \

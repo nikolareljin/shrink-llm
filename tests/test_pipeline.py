@@ -25,7 +25,11 @@ def _base_config() -> dict:
             "align_hidden": True,
         },
         "mobile": {
-            "ios": {"deployment_target": "iOS17", "compute_units": "CPU_AND_NE", "quantization": "fp16"}
+            "ios": {
+                "deployment_target": "iOS17",
+                "compute_units": "CPU_AND_NE",
+                "quantization": "fp16",
+            }
         },
         "benchmark": {"dataset": "datasets/legal/eval"},
     }

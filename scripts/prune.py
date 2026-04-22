@@ -38,8 +38,21 @@ class HeadImportanceScorer:
             attn_weights = None
             if isinstance(output, tuple) and len(output) > 1:
                 attn_weights = output[1]
-            if isinstance(attn_weights, torch.Tensor) and attn_weights.ndim == 4:
+            if not isinstance(attn_weights, torch.Tensor):
+                return
+            if attn_weights.ndim == 4:
                 self.head_importance[name] = attn_weights.detach().abs().mean(dim=(0, 2, 3))
+            elif attn_weights.ndim == 3:
+                # Some architectures return (batch, seq, seq) averaged over heads; use mean.
+                self.head_importance[name] = (
+                    attn_weights.detach().abs().mean(dim=(0, 1, 2)).unsqueeze(0)
+                )
+            else:
+                log.warning(
+                    "Layer %s returned attention weights with unexpected shape %s; skipping.",
+                    name,
+                    list(attn_weights.shape),
+                )
 
         return hook
 
@@ -174,6 +187,7 @@ def _zero_attention_heads(model: nn.Module, layer_name: str, prune_indices: list
         num_heads: int = module.num_heads
         head_dim: int | None = getattr(module, "head_dim", None)
 
+        zeroed_any = False
         for proj_attr in ("q_proj", "k_proj", "v_proj", "query", "key", "value"):
             proj: nn.Linear | None = getattr(module, proj_attr, None)
             if proj is None or not isinstance(proj, nn.Linear):
@@ -188,6 +202,15 @@ def _zero_attention_heads(model: nn.Module, layer_name: str, prune_indices: list
                     proj.weight.data[start:end, :] = 0.0
                     if proj.bias is not None:
                         proj.bias.data[start:end] = 0.0
+            zeroed_any = True
+
+        if not zeroed_any:
+            log.warning(
+                "Layer %s: no standard projection attributes (q_proj/k_proj/v_proj/query/key/value) "
+                "found as nn.Linear — head pruning had no effect. "
+                "Fused QKV projections or non-Linear layers are not supported.",
+                layer_name,
+            )
         break
 
 
