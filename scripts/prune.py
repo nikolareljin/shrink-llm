@@ -13,7 +13,7 @@ from typing import Any
 
 import torch
 import torch.nn as nn
-from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, TrainingArguments
+from transformers import AutoConfig, AutoTokenizer, TrainingArguments
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger(__name__)
@@ -50,18 +50,21 @@ class HeadImportanceScorer:
         self._hooks.clear()
 
     def score_heads(self, dataloader, num_batches: int = 50) -> dict[str, torch.Tensor]:
-        """Run forward passes to compute head importance scores."""
+        """Run forward passes to compute head importance scores.
+
+        Must NOT use torch.no_grad() — hooks only fire when attn_weights.requires_grad is True,
+        which requires gradient tracking to be active during the forward pass.
+        """
         self.register_hooks()
         self.model.eval()
         scores: dict[str, list] = {}
 
-        with torch.no_grad():
-            for i, batch in enumerate(dataloader):
-                if i >= num_batches:
-                    break
-                self.model(**{k: v for k, v in batch.items() if k != "labels"})
-                for name, importance in self.head_importance.items():
-                    scores.setdefault(name, []).append(importance.cpu())
+        for i, batch in enumerate(dataloader):
+            if i >= num_batches:
+                break
+            self.model(**{k: v for k, v in batch.items() if k != "labels"})
+            for name, importance in self.head_importance.items():
+                scores.setdefault(name, []).append(importance.cpu())
 
         self.remove_hooks()
         return {name: torch.stack(v).mean(0) for name, v in scores.items()}
@@ -146,17 +149,21 @@ def _make_synthetic_dataloader(task: str, device: str) -> list[dict[str, Any]]:
         if task == "ocr":
             batches.append({"pixel_values": torch.randn(1, 3, 384, 384, device=device)})
         elif task == "legal":
-            batches.append({
-                "input_ids": torch.randint(0, 1000, (1, 128), device=device),
-                "attention_mask": torch.ones(1, 128, dtype=torch.long, device=device),
-            })
+            batches.append(
+                {
+                    "input_ids": torch.randint(0, 1000, (1, 128), device=device),
+                    "attention_mask": torch.ones(1, 128, dtype=torch.long, device=device),
+                }
+            )
         elif task == "audio":
             batches.append({"input_values": torch.randn(1, 16000, device=device)})
         else:
-            batches.append({
-                "input_ids": torch.randint(0, 1000, (1, 64), device=device),
-                "attention_mask": torch.ones(1, 64, dtype=torch.long, device=device),
-            })
+            batches.append(
+                {
+                    "input_ids": torch.randint(0, 1000, (1, 64), device=device),
+                    "attention_mask": torch.ones(1, 64, dtype=torch.long, device=device),
+                }
+            )
     return batches
 
 
@@ -185,6 +192,26 @@ def _zero_attention_heads(model: nn.Module, layer_name: str, prune_indices: list
                     if proj.bias is not None:
                         proj.bias.data[start:end] = 0.0
         break
+
+
+def _load_model_for_task(model_id: str, task: str, device: str) -> tuple[nn.Module, Any]:
+    """Load the appropriate model class and tokenizer/processor for each task."""
+    if task == "ocr":
+        from transformers import TrOCRProcessor, VisionEncoderDecoderModel
+
+        model = VisionEncoderDecoderModel.from_pretrained(model_id, torch_dtype=torch.float32)
+        processor = TrOCRProcessor.from_pretrained(model_id)
+    elif task == "audio":
+        from transformers import AutoFeatureExtractor, AutoModelForAudioClassification
+
+        model = AutoModelForAudioClassification.from_pretrained(model_id, torch_dtype=torch.float32)
+        processor = AutoFeatureExtractor.from_pretrained(model_id)
+    else:
+        from transformers import AutoModelForCausalLM
+
+        model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.float32)
+        processor = AutoTokenizer.from_pretrained(model_id)
+    return model.to(device), processor
 
 
 def count_parameters(model: nn.Module) -> int:
@@ -217,11 +244,8 @@ def main() -> None:
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    log.info("Loading model %s...", args.model)
-    model = AutoModelForCausalLM.from_pretrained(args.model, torch_dtype=torch.float32).to(
-        args.device
-    )
-    tokenizer = AutoTokenizer.from_pretrained(args.model)
+    log.info("Loading model %s for task '%s'...", args.model, args.task)
+    model, tokenizer = _load_model_for_task(args.model, args.task, args.device)
 
     before_params = count_parameters(model)
     log.info("Parameters before pruning: %s", f"{before_params:,}")
