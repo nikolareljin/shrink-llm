@@ -75,7 +75,10 @@ class HeadImportanceScorer:
                 if i >= num_batches:
                     break
                 model_inputs = {k: v for k, v in batch.items() if k != "labels"}
-                self.model(**model_inputs, output_attentions=True)
+                try:
+                    self.model(**model_inputs, output_attentions=True)
+                except TypeError:
+                    self.model(**model_inputs)
                 for name, importance in self.head_importance.items():
                     scores.setdefault(name, []).append(importance.cpu())
 
