@@ -49,6 +49,36 @@ class TestMLPPruner:
         assert isinstance(pruned, int)
 
 
+class TestHeadImportanceScorer:
+    def test_score_heads_requests_attentions_and_collects_scores(self):
+        from scripts.prune import HeadImportanceScorer
+
+        class FakeAttention(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.num_heads = 2
+
+            def forward(self, input_ids=None, output_attentions=False, **kwargs):
+                assert output_attentions is True
+                weights = torch.ones(1, self.num_heads, 4, 4)
+                return torch.zeros(1, 4, 8), weights
+
+        class FakeModel(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.attention = FakeAttention()
+
+            def forward(self, **kwargs):
+                return self.attention(**kwargs)
+
+        scorer = HeadImportanceScorer(FakeModel())
+        scores = scorer.score_heads([{"input_ids": torch.ones(1, 4, dtype=torch.long)}], num_batches=1)
+
+        assert "attention" in scores
+        assert scores["attention"].shape == (2,)
+        assert torch.allclose(scores["attention"], torch.ones(2))
+
+
 class TestCountParameters:
     def test_counts_correctly(self):
         from scripts.prune import count_parameters

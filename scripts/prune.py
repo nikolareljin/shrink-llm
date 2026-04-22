@@ -20,7 +20,7 @@ log = logging.getLogger(__name__)
 
 
 class HeadImportanceScorer:
-    """Compute attention head importance using Taylor expansion (gradient × activation)."""
+    """Compute attention head importance from average attention weights."""
 
     def __init__(self, model: nn.Module):
         self.model = model
@@ -35,11 +35,10 @@ class HeadImportanceScorer:
 
     def _make_hook(self, name: str):
         def hook(module, input, output):
-            if isinstance(output, tuple):
+            attn_weights = None
+            if isinstance(output, tuple) and len(output) > 1:
                 attn_weights = output[1]
-            else:
-                attn_weights = output
-            if attn_weights is not None and attn_weights.requires_grad:
+            if isinstance(attn_weights, torch.Tensor) and attn_weights.ndim == 4:
                 self.head_importance[name] = attn_weights.detach().abs().mean(dim=(0, 2, 3))
 
         return hook
@@ -50,21 +49,19 @@ class HeadImportanceScorer:
         self._hooks.clear()
 
     def score_heads(self, dataloader, num_batches: int = 50) -> dict[str, torch.Tensor]:
-        """Run forward passes to compute head importance scores.
-
-        Must NOT use torch.no_grad() — hooks only fire when attn_weights.requires_grad is True,
-        which requires gradient tracking to be active during the forward pass.
-        """
+        """Run forward passes to compute head importance scores."""
         self.register_hooks()
         self.model.eval()
         scores: dict[str, list] = {}
 
-        for i, batch in enumerate(dataloader):
-            if i >= num_batches:
-                break
-            self.model(**{k: v for k, v in batch.items() if k != "labels"})
-            for name, importance in self.head_importance.items():
-                scores.setdefault(name, []).append(importance.cpu())
+        with torch.no_grad():
+            for i, batch in enumerate(dataloader):
+                if i >= num_batches:
+                    break
+                model_inputs = {k: v for k, v in batch.items() if k != "labels"}
+                self.model(**model_inputs, output_attentions=True)
+                for name, importance in self.head_importance.items():
+                    scores.setdefault(name, []).append(importance.cpu())
 
         self.remove_hooks()
         return {name: torch.stack(v).mean(0) for name, v in scores.items()}
