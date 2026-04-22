@@ -72,7 +72,9 @@ class TestHeadImportanceScorer:
                 return self.attention(**kwargs)
 
         scorer = HeadImportanceScorer(FakeModel())
-        scores = scorer.score_heads([{"input_ids": torch.ones(1, 4, dtype=torch.long)}], num_batches=1)
+        scores = scorer.score_heads(
+            [{"input_ids": torch.ones(1, 4, dtype=torch.long)}], num_batches=1
+        )
 
         assert "attention" in scores
         assert scores["attention"].shape == (2,)

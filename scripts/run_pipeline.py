@@ -60,7 +60,11 @@ def _quantized_artifact_info(config: dict, output_dir: Path, model_label: str) -
     precision = str(q.get("precision", "int8")).lower()
     mode = str(q.get("mode", "dynamic")).lower()
     if mode == "gptq":
-        return output_dir / f"{model_label}_gptq", f"{model_label}_gptq"
+        raise ValueError(
+            "quantization.mode='gptq' is not supported by run_pipeline.py: "
+            "GPTQ produces a directory artifact, but downstream convert_* and benchmark "
+            "stages expect an ONNX file path. Use a non-GPTQ quantization mode for this pipeline."
+        )
     return output_dir / f"{model_label}_{precision}.onnx", f"{model_label}_{precision}"
 
 
@@ -77,7 +81,9 @@ def init_pipeline_state(config: dict, output_dir: Path) -> dict[str, Path | str]
     }
 
 
-def update_pipeline_state(stage: str, state: dict[str, Path | str], config: dict, output_dir: Path) -> None:
+def update_pipeline_state(
+    stage: str, state: dict[str, Path | str], config: dict, output_dir: Path
+) -> None:
     if stage not in {"prune", "distill"}:
         return
 
