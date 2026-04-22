@@ -190,7 +190,9 @@ def _zero_attention_heads(model: nn.Module, layer_name: str, prune_indices: list
         num_heads: int = module.num_heads
         head_dim: int | None = getattr(module, "head_dim", None)
         if num_heads <= 0:
-            log.warning("Layer %s: invalid num_heads=%s; skipping head pruning.", layer_name, num_heads)
+            log.warning(
+                "Layer %s: invalid num_heads=%s; skipping head pruning.", layer_name, num_heads
+            )
             break
 
         zeroed_any = False
