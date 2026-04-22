@@ -59,20 +59,28 @@ def build_stage_args(stage: str, config: dict, output_dir: Path) -> list[str]:
 
     if stage == "export":
         return [
-            "--model", model_id,
-            "--task", task,
-            "--output", onnx_path,
-            "--opset", str(config.get("onnx_opset", 17)),
+            "--model",
+            model_id,
+            "--task",
+            task,
+            "--output",
+            onnx_path,
+            "--opset",
+            str(config.get("onnx_opset", 17)),
             "--validate",
         ]
 
     elif stage == "quantize":
         q = config.get("quantization", {})
         args = [
-            "--input", onnx_path,
-            "--output", quant_path,
-            "--precision", q.get("precision", "int8"),
-            "--mode", q.get("mode", "dynamic"),
+            "--input",
+            onnx_path,
+            "--output",
+            quant_path,
+            "--precision",
+            q.get("precision", "int8"),
+            "--mode",
+            q.get("mode", "dynamic"),
         ]
         if q.get("calibration_data"):
             args += ["--calibration-data", q["calibration_data"]]
@@ -83,12 +91,18 @@ def build_stage_args(stage: str, config: dict, output_dir: Path) -> list[str]:
     elif stage == "prune":
         p = config.get("pruning", {})
         return [
-            "--model", model_id,
-            "--task", task,
-            "--method", p.get("method", "magnitude"),
-            "--sparsity", str(p.get("sparsity", 0.3)),
-            "--output-dir", str(output_dir / "pruned"),
-            "--finetune-epochs", str(p.get("finetune_epochs", 0)),
+            "--model",
+            model_id,
+            "--task",
+            task,
+            "--method",
+            p.get("method", "magnitude"),
+            "--sparsity",
+            str(p.get("sparsity", 0.3)),
+            "--output-dir",
+            str(output_dir / "pruned"),
+            "--finetune-epochs",
+            str(p.get("finetune_epochs", 0)),
         ]
 
     elif stage == "distill":
@@ -98,17 +112,28 @@ def build_stage_args(stage: str, config: dict, output_dir: Path) -> list[str]:
             log.warning("Distill stage requested but 'teacher' not set in config — skipping")
             return []
         args = [
-            "--teacher", teacher,
-            "--student", model_id,
-            "--task", task,
-            "--dataset", str(d.get("dataset", "datasets/train")),
-            "--output-dir", str(output_dir / "distilled"),
-            "--temperature", str(d.get("temperature", 6.0)),
-            "--alpha", str(d.get("alpha", 0.1)),
-            "--beta", str(d.get("beta", 0.9)),
-            "--epochs", str(d.get("epochs", 10)),
-            "--batch-size", str(d.get("batch_size", 16)),
-            "--lr", str(d.get("lr", 5e-5)),
+            "--teacher",
+            teacher,
+            "--student",
+            model_id,
+            "--task",
+            task,
+            "--dataset",
+            str(d.get("dataset", "datasets/train")),
+            "--output-dir",
+            str(output_dir / "distilled"),
+            "--temperature",
+            str(d.get("temperature", 6.0)),
+            "--alpha",
+            str(d.get("alpha", 0.1)),
+            "--beta",
+            str(d.get("beta", 0.9)),
+            "--epochs",
+            str(d.get("epochs", 10)),
+            "--batch-size",
+            str(d.get("batch_size", 16)),
+            "--lr",
+            str(d.get("lr", 5e-5)),
         ]
         if d.get("fp16"):
             args.append("--fp16")
@@ -117,37 +142,53 @@ def build_stage_args(stage: str, config: dict, output_dir: Path) -> list[str]:
     elif stage == "convert_tflite":
         m = config.get("mobile", {}).get("android", {})
         return [
-            "--input", quant_path,
-            "--output", str(output_dir / f"{model_stem}.tflite"),
-            "--quantization", m.get("quantization", "int8"),
+            "--input",
+            quant_path,
+            "--output",
+            str(output_dir / f"{model_stem}.tflite"),
+            "--quantization",
+            m.get("quantization", "int8"),
         ]
 
     elif stage == "convert_coreml":
         m = config.get("mobile", {}).get("ios", {})
         return [
-            "--input", quant_path,
-            "--output", str(output_dir / f"{model_stem}.mlpackage"),
-            "--deployment-target", m.get("deployment_target", "iOS16"),
-            "--compute-units", m.get("compute_units", "ALL"),
+            "--input",
+            quant_path,
+            "--output",
+            str(output_dir / f"{model_stem}.mlpackage"),
+            "--minimum-deployment-target",
+            m.get("deployment_target", "iOS16"),
+            "--compute-units",
+            m.get("compute_units", "ALL"),
         ]
 
     elif stage == "convert_onnx_mobile":
         return [
-            "--input", quant_path,
-            "--output", str(output_dir / f"{model_stem}_mobile.onnx"),
+            "--input",
+            quant_path,
+            "--output",
+            str(output_dir / f"{model_stem}_mobile.onnx"),
         ]
 
     elif stage == "benchmark":
         b = config.get("benchmark", {})
         result_name = f"{model_stem}_int8"
         args = [
-            "--model", quant_path,
-            "--task", task,
-            "--runtime", b.get("runtime", "onnxruntime"),
-            "--warmup-runs", str(b.get("warmup_runs", 10)),
-            "--benchmark-runs", str(b.get("benchmark_runs", 100)),
-            "--output-json", str(output_dir / "benchmarks" / f"{result_name}.json"),
-            "--output-md", str(output_dir / "benchmarks" / f"{result_name}.md"),
+            "--model",
+            quant_path,
+            "--task",
+            task,
+            "--runtime",
+            b.get("runtime", "onnxruntime"),
+            "--warmup-runs",
+            str(b.get("warmup_runs", 10)),
+            "--benchmark-runs",
+            str(b.get("benchmark_runs", 100)),
+            "--output-json",
+            str(output_dir / "benchmarks" / f"{result_name}.json"),
+            "--output-md",
+            str(output_dir / "benchmarks" / f"{result_name}.md"),
         ]
         if b.get("dataset"):
             args += ["--dataset", b["dataset"]]
@@ -168,8 +209,8 @@ def _update_manifest(manifest_path: Path, stage: str, args_list: list[str], succ
     if manifest_path.exists():
         try:
             existing = json.loads(manifest_path.read_text())
-        except Exception:
-            pass
+        except (OSError, json.JSONDecodeError) as exc:
+            log.warning("Could not read manifest %s: %s — starting fresh", manifest_path, exc)
     existing.setdefault("stages", []).append(record)
     manifest_path.write_text(json.dumps(existing, indent=2))
 
@@ -189,6 +230,12 @@ def main() -> None:
     args = parser.parse_args()
 
     config = load_config(args.config)
+
+    if not config.get("model"):
+        parser.error("Config must specify a non-empty 'model' field")
+    if not config.get("task"):
+        parser.error("Config must specify a non-empty 'task' field")
+
     stages = [s.strip() for s in args.stages.split(",")]
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
