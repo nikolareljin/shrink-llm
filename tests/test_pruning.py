@@ -80,6 +80,54 @@ class TestHeadImportanceScorer:
         assert scores["attention"].shape == (2,)
         assert torch.allclose(scores["attention"], torch.ones(2))
 
+    def test_register_hooks_matches_attn_module_names(self):
+        from scripts.prune import HeadImportanceScorer
+
+        class FakeAttention(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.num_heads = 2
+
+            def forward(self, input_ids=None, output_attentions=False, **kwargs):
+                weights = torch.ones(1, self.num_heads, 4, 4)
+                return torch.zeros(1, 4, 8), weights
+
+        class FakeModel(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.self_attn = FakeAttention()
+
+            def forward(self, **kwargs):
+                return self.self_attn(**kwargs)
+
+        scorer = HeadImportanceScorer(FakeModel())
+        scores = scorer.score_heads(
+            [{"input_ids": torch.ones(1, 4, dtype=torch.long)}], num_batches=1
+        )
+
+        assert "self_attn" in scores
+
+
+class TestZeroAttentionHeads:
+    def test_skips_invalid_projection_shapes(self):
+        from scripts.prune import _zero_attention_heads
+
+        class FakeAttention(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.num_heads = 3
+                self.q_proj = nn.Linear(8, 8)
+
+        class FakeModel(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.attention = FakeAttention()
+
+        model = FakeModel()
+        before = model.attention.q_proj.weight.detach().clone()
+        _zero_attention_heads(model, "attention", [0])
+        assert torch.equal(model.attention.q_proj.weight, before)
+
 
 class TestCountParameters:
     def test_counts_correctly(self):
