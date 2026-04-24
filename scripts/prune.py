@@ -48,7 +48,17 @@ class HeadImportanceScorer:
             if attn_weights.ndim == 4:
                 self.head_importance[name] = attn_weights.detach().abs().mean(dim=(0, 2, 3))
             elif attn_weights.ndim == 3:
-                # Some architectures return (batch, seq, seq) averaged over heads; use mean.
+                # 3D means (batch, seq, seq) — already averaged over heads.  Only usable
+                # when the module truly has a single head; skip otherwise to avoid producing
+                # a length-1 score vector for a multi-head layer.
+                if module.num_heads > 1:
+                    log.warning(
+                        "Layer %s returned 3D attention weights (averaged over heads) "
+                        "but module.num_heads=%s; skipping per-head scoring.",
+                        name,
+                        module.num_heads,
+                    )
+                    return
                 self.head_importance[name] = (
                     attn_weights.detach().abs().mean(dim=(0, 1, 2)).unsqueeze(0)
                 )
@@ -161,29 +171,27 @@ class LayerDropper:
         return list(range(0, num_layers, 2))
 
 
-def _make_synthetic_dataloader(task: str, device: str) -> list[dict[str, Any]]:
-    """Return synthetic input batches for importance scoring without a real dataset."""
-    batches = []
-    for _ in range(64):
+_SYNTHETIC_BATCHES = 64
+
+
+def _make_synthetic_dataloader(task: str, device: str, num_batches: int = _SYNTHETIC_BATCHES):
+    """Yield synthetic input batches lazily to avoid pre-allocating all tensors on device."""
+    for _ in range(num_batches):
         if task == "ocr":
-            batches.append({"pixel_values": torch.randn(1, 3, 384, 384, device=device)})
+            batch: dict[str, Any] = {"pixel_values": torch.randn(1, 3, 384, 384)}
         elif task == "legal":
-            batches.append(
-                {
-                    "input_ids": torch.randint(0, 1000, (1, 128), device=device),
-                    "attention_mask": torch.ones(1, 128, dtype=torch.long, device=device),
-                }
-            )
+            batch = {
+                "input_ids": torch.randint(0, 1000, (1, 128)),
+                "attention_mask": torch.ones(1, 128, dtype=torch.long),
+            }
         elif task == "audio":
-            batches.append({"input_values": torch.randn(1, 16000, device=device)})
+            batch = {"input_values": torch.randn(1, 16000)}
         else:
-            batches.append(
-                {
-                    "input_ids": torch.randint(0, 1000, (1, 64), device=device),
-                    "attention_mask": torch.ones(1, 64, dtype=torch.long, device=device),
-                }
-            )
-    return batches
+            batch = {
+                "input_ids": torch.randint(0, 1000, (1, 64)),
+                "attention_mask": torch.ones(1, 64, dtype=torch.long),
+            }
+        yield {k: v.to(device) for k, v in batch.items()}
 
 
 def _zero_attention_heads(model: nn.Module, layer_name: str, prune_indices: list[int]) -> None:
@@ -324,7 +332,7 @@ def main() -> None:
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     log.info("Loading model %s for task '%s'...", args.model, args.task)
-    model, tokenizer = _load_model_for_task(args.model, args.task, args.device)
+    model, processor = _load_model_for_task(args.model, args.task, args.device)
 
     before_params = count_parameters(model)
     log.info("Parameters before pruning: %s", f"{before_params:,}")
@@ -332,7 +340,7 @@ def main() -> None:
     if args.method == "attention_heads":
         scorer = HeadImportanceScorer(model)
         synthetic_inputs = _make_synthetic_dataloader(args.task, args.device)
-        scores = scorer.score_heads(synthetic_inputs, num_batches=min(50, len(synthetic_inputs)))
+        scores = scorer.score_heads(synthetic_inputs, num_batches=50)
         if scores:
             log.info("Head importance scores computed for %d attention layers", len(scores))
             for layer_name, layer_scores in scores.items():
@@ -391,7 +399,7 @@ def main() -> None:
         log.info("(Fine-tune trainer configured — inject dataset to enable)")
 
     model.save_pretrained(str(args.output_dir))
-    tokenizer.save_pretrained(str(args.output_dir))
+    processor.save_pretrained(str(args.output_dir))
     log.info("Pruned model saved to %s", args.output_dir)
 
 
