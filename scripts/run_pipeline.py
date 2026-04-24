@@ -359,10 +359,27 @@ def _update_manifest(manifest_path: Path, stage: str, args_list: list[str], succ
     existing: dict = {"stages": []}
     if manifest_path.exists():
         try:
-            existing = json.loads(manifest_path.read_text())
+            loaded = json.loads(manifest_path.read_text())
+            if isinstance(loaded, dict):
+                existing = loaded
+            else:
+                log.warning(
+                    "Manifest %s contained %s JSON, expected object — starting fresh",
+                    manifest_path,
+                    type(loaded).__name__,
+                )
         except (OSError, json.JSONDecodeError) as exc:
             log.warning("Could not read manifest %s: %s — starting fresh", manifest_path, exc)
-    existing.setdefault("stages", []).append(record)
+    stages = existing.get("stages")
+    if not isinstance(stages, list):
+        if "stages" in existing:
+            log.warning(
+                "Manifest %s has non-list 'stages' field (%s) — resetting",
+                manifest_path,
+                type(stages).__name__,
+            )
+        existing["stages"] = []
+    existing["stages"].append(record)
     manifest_path.write_text(json.dumps(existing, indent=2))
 
 

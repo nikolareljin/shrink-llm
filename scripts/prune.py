@@ -76,6 +76,7 @@ class HeadImportanceScorer:
             for i, batch in enumerate(dataloader):
                 if i >= num_batches:
                     break
+                self.head_importance.clear()
                 model_inputs = {k: v for k, v in batch.items() if k != "labels"}
                 try:
                     self.model(**model_inputs, output_attentions=True)
