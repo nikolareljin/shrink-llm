@@ -330,6 +330,10 @@ def count_parameters(model: nn.Module) -> int:
     return sum(p.numel() for p in model.parameters())
 
 
+def count_nonzero_parameters(model: nn.Module) -> int:
+    return sum(int((p != 0).sum()) for p in model.parameters())
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Structured pruning for transformer models")
     parser.add_argument("--model", required=True, help="HuggingFace model ID or local path")
@@ -388,8 +392,11 @@ def main() -> None:
             )
             for name, param in model.named_parameters():
                 if param.requires_grad and param.dim() >= 2:
-                    threshold = param.data.abs().quantile(args.sparsity)
-                    param.data[param.data.abs() < threshold] = 0.0
+                    if args.sparsity >= 1.0:
+                        param.data.zero_()
+                    else:
+                        threshold = param.data.abs().quantile(args.sparsity)
+                        param.data[param.data.abs() < threshold] = 0.0
 
     elif args.method == "layers":
         config = AutoConfig.from_pretrained(args.model)
@@ -407,13 +414,20 @@ def main() -> None:
     elif args.method == "magnitude":
         for name, param in model.named_parameters():
             if param.requires_grad and param.dim() >= 2:
-                threshold = param.data.abs().quantile(args.sparsity)
-                param.data[param.data.abs() < threshold] = 0.0
+                if args.sparsity >= 1.0:
+                    param.data.zero_()
+                else:
+                    threshold = param.data.abs().quantile(args.sparsity)
+                    param.data[param.data.abs() < threshold] = 0.0
         log.info("Applied magnitude pruning with sparsity=%.2f", args.sparsity)
 
     after_params = count_parameters(model)
     reduction = (1 - after_params / before_params) * 100
     log.info("Parameters after pruning: %s (%.1f%% reduction)", f"{after_params:,}", reduction)
+    if args.method in {"attention_heads", "mlp", "magnitude"}:
+        nonzero = count_nonzero_parameters(model)
+        sparsity_pct = (1 - nonzero / max(1, before_params)) * 100
+        log.info("Nonzero parameters: %s (%.1f%% sparsity)", f"{nonzero:,}", sparsity_pct)
 
     if args.finetune_epochs > 0:
         log.info("Fine-tuning pruned model for %d epochs...", args.finetune_epochs)
