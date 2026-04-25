@@ -110,15 +110,34 @@ def _validated_quantization_settings(config: dict) -> tuple[str, str]:
     return mode, precision
 
 
+_ONNX_REQUIRED_STAGES = {
+    "quantize",
+    "convert_tflite",
+    "convert_coreml",
+    "convert_onnx_mobile",
+    "benchmark",
+}
+
+
 def _quantized_artifact_info(config: dict, output_dir: Path, model_label: str) -> tuple[Path, str]:
     mode, precision = _validated_quantization_settings(config)
     if mode == "gptq":
-        raise ValueError(
-            "quantization.mode='gptq' is not supported by run_pipeline.py: "
-            "GPTQ produces a directory artifact, but downstream convert_* and benchmark "
-            "stages expect an ONNX file path. Use a non-GPTQ quantization mode for this pipeline."
-        )
+        artifact_label = f"{model_label}_{precision}_gptq"
+        return output_dir / artifact_label, artifact_label
     return output_dir / f"{model_label}_{precision}.onnx", f"{model_label}_{precision}"
+
+
+def _validate_gptq_stage_compat(config: dict, stages: list[str]) -> None:
+    mode, _ = _validated_quantization_settings(config)
+    if mode != "gptq":
+        return
+    conflicting = sorted(_ONNX_REQUIRED_STAGES & set(stages))
+    if conflicting:
+        raise ValueError(
+            f"quantization.mode='gptq' produces a directory artifact incompatible with "
+            f"ONNX-dependent stages: {', '.join(conflicting)}. "
+            "Remove those stages or switch to a non-GPTQ quantization mode."
+        )
 
 
 def init_pipeline_state(config: dict, output_dir: Path) -> dict[str, Path | str]:
@@ -455,6 +474,7 @@ def main() -> None:
     stages = order_stages(requested_stages)
     try:
         validate_stage_selection(stages)
+        _validate_gptq_stage_compat(config, stages)
     except ValueError as exc:
         parser.error(str(exc))
     args.output_dir.mkdir(parents=True, exist_ok=True)

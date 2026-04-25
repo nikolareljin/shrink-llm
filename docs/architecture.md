@@ -255,7 +255,7 @@ shrink-llm/
 **Goal**: Remove entire attention heads and MLP blocks that contribute least to output quality, reducing computation permanently.
 
 #### C1. Attention Head Pruning
-1. Compute head importance scores (Taylor expansion or gradient × activation magnitude)
+1. Compute head importance scores (average attention weight magnitude across calibration batches)
 2. Rank heads globally across all layers
 3. Zero out bottom-K% heads, retrain for 1–3 epochs
 4. Tools: `nn_pruning`, custom `transformers` hooks
@@ -392,15 +392,14 @@ python prune.py \
   --model <hf_model_id_or_path> \
   --task <ocr|legal|audio> \
   --method <attention_heads|mlp|layers|magnitude> \
-  --sparsity 0.3 \                              # fraction to prune
-  --calibration-data <path/> \
+  --sparsity 0.3 \                              # fraction to prune (0–1)
   --output-dir <models/student/pruned/> \
   --finetune-epochs 3 \
   --device <cpu|cuda>
 ```
 
 **Internal modules**:
-- `HeadImportanceScorer` — Taylor/gradient scoring of attention heads
+- `HeadImportanceScorer` — average attention weight scoring of attention heads
 - `MLPPruner` — removes low-activation neurons from FFN layers
 - `LayerDropper` — removes entire transformer layers
 - `PruningTrainer` — short fine-tune loop post-pruning
