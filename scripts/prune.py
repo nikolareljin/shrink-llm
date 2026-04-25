@@ -102,25 +102,26 @@ class HeadImportanceScorer:
         self.model.eval()
         scores: dict[str, list] = {}
 
-        with torch.no_grad():
-            for i, batch in enumerate(dataloader):
-                if i >= num_batches:
-                    break
-                self.head_importance.clear()
-                model_inputs = {k: v for k, v in batch.items() if k != "labels"}
-                try:
-                    self.model(**model_inputs, output_attentions=True)
-                except TypeError as exc:
-                    if "unexpected keyword argument" in str(exc) and "output_attentions" in str(
-                        exc
-                    ):
-                        self.model(**model_inputs)
-                    else:
-                        raise
-                for name, importance in self.head_importance.items():
-                    scores.setdefault(name, []).append(importance.cpu())
-
-        self.remove_hooks()
+        try:
+            with torch.no_grad():
+                for i, batch in enumerate(dataloader):
+                    if i >= num_batches:
+                        break
+                    self.head_importance.clear()
+                    model_inputs = {k: v for k, v in batch.items() if k != "labels"}
+                    try:
+                        self.model(**model_inputs, output_attentions=True)
+                    except TypeError as exc:
+                        if "unexpected keyword argument" in str(exc) and "output_attentions" in str(
+                            exc
+                        ):
+                            self.model(**model_inputs)
+                        else:
+                            raise
+                    for name, importance in self.head_importance.items():
+                        scores.setdefault(name, []).append(importance.cpu())
+        finally:
+            self.remove_hooks()
         return {name: torch.stack(v).mean(0) for name, v in scores.items()}
 
 
@@ -377,9 +378,7 @@ def main() -> None:
             log.info("Head importance scores computed for %d attention layers", len(scores))
             for layer_name, layer_scores in scores.items():
                 n_heads = len(layer_scores)
-                n_prune = min(
-                    n_heads, max(1 if args.sparsity > 0 else 0, round(n_heads * args.sparsity))
-                )
+                n_prune = min(n_heads, int(n_heads * args.sparsity))
                 log.info("Layer %s: pruning %d/%d heads", layer_name, n_prune, n_heads)
                 if n_prune > 0:
                     _, prune_indices = layer_scores.topk(n_prune, largest=False)
