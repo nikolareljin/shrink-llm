@@ -183,7 +183,11 @@ def _has_model_artifacts(model_dir: Path) -> bool:
 
 
 def update_pipeline_state(
-    stage: str, state: dict[str, Path | str], config: dict, output_dir: Path
+    stage: str,
+    state: dict[str, Path | str],
+    config: dict,
+    output_dir: Path,
+    dry_run: bool = False,
 ) -> None:
     if stage == "quantize":
         state["current_onnx_path"] = state["quant_path"]
@@ -195,7 +199,7 @@ def update_pipeline_state(
 
     suffix = "pruned" if stage == "prune" else "distilled"
     stage_output = output_dir / suffix
-    if stage == "distill" and not _has_model_artifacts(stage_output):
+    if stage == "distill" and not dry_run and not _has_model_artifacts(stage_output):
         log.warning(
             "Stage '%s' did not produce reusable model artifacts in %s; keeping current model state.",
             stage,
@@ -229,7 +233,6 @@ def build_stage_args(
     """Build CLI args for each stage from config."""
     model_id = str(state["model_id"])
     task = config.get("task", "")
-    model_label = str(state["model_label"])
     onnx_path = str(state["onnx_path"])
     quant_path = str(state["quant_path"])
     current_onnx_input = str(state.get("current_onnx_path", state["onnx_path"]))
@@ -544,7 +547,7 @@ def main() -> None:
         if not args.dry_run:
             _update_manifest(manifest_path, stage, stage_args, success)
         if success:
-            update_pipeline_state(stage, state, config, args.output_dir)
+            update_pipeline_state(stage, state, config, args.output_dir, dry_run=args.dry_run)
         if not success:
             log.error("Pipeline aborted at stage '%s'", stage)
             break
