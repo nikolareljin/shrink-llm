@@ -202,6 +202,7 @@ def build_stage_args(
     config: dict,
     output_dir: Path,
     state: dict[str, Path | str],
+    dry_run: bool = False,
 ) -> list[str]:
     """Build CLI args for each stage from config."""
     model_id = str(state["model_id"])
@@ -332,7 +333,7 @@ def build_stage_args(
                     "quantization.calibration_data, benchmark.dataset). Downgrading to 'fp16'."
                 )
                 quantization = "fp16"
-            else:
+            elif not dry_run:
                 dataset_path = Path(representative_dataset)
                 if not dataset_path.exists() or not dataset_path.is_dir():
                     log.warning(
@@ -502,7 +503,7 @@ def main() -> None:
         log.warning("Unknown stage '%s' — skipping", stage)
 
     for stage in stages:
-        stage_args = build_stage_args(stage, config, args.output_dir, state)
+        stage_args = build_stage_args(stage, config, args.output_dir, state, dry_run=args.dry_run)
         if not stage_args and stage not in ("export",):
             log.warning("Stage '%s' produced no args, skipping", stage)
             continue
