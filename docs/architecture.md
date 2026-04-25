@@ -21,7 +21,7 @@ ShrinkLLM provides a reproducible, modular pipeline to compress any capable mode
 |---|---|---|---|
 | OCR | Extract text from photos of documents, receipts, handwritten notes | ≥ 95% CER | < 200 ms/page |
 | Legal Document Reasoning | Flag risky clauses, summarize contracts, answer legal questions | ≥ 85% F1 | < 2 s/doc |
-| Audio Classification | Classify cry type (hunger, pain, discomfort) from 5-second audio clip | ≥ 90% accuracy | < 100 ms |
+| Audio Classification | Classify cry type (hunger, pain, discomfort) from 1-second audio clip | ≥ 90% accuracy | < 100 ms |
 
 ### Smartphone Hardware Constraints
 
