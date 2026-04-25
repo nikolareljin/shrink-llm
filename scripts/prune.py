@@ -357,6 +357,11 @@ def main() -> None:
         "--finetune-epochs", type=int, default=0, help="Epochs to fine-tune after pruning"
     )
     parser.add_argument("--device", default="cpu", choices=["cpu", "cuda"])
+    parser.add_argument(
+        "--report-sparsity",
+        action="store_true",
+        help="Log nonzero-parameter sparsity after pruning (expensive on large models)",
+    )
     args = parser.parse_args()
 
     if not (0.0 <= args.sparsity <= 1.0):
@@ -425,14 +430,15 @@ def main() -> None:
         reduction = (1 - after_params / before_params) * 100
         log.info("Parameters after pruning: %s (%.1f%% reduction)", f"{after_params:,}", reduction)
     else:
-        nonzero = count_nonzero_parameters(model)
-        sparsity_pct = (1 - nonzero / max(1, before_params)) * 100
-        log.info(
-            "Parameters: %s total, %s nonzero (%.1f%% sparsity)",
-            f"{after_params:,}",
-            f"{nonzero:,}",
-            sparsity_pct,
-        )
+        log.info("Parameters: %s (weights zeroed, not removed)", f"{after_params:,}")
+        if args.report_sparsity:
+            nonzero = count_nonzero_parameters(model)
+            sparsity_pct = (1 - nonzero / max(1, before_params)) * 100
+            log.info(
+                "Nonzero parameters: %s (%.1f%% sparsity)",
+                f"{nonzero:,}",
+                sparsity_pct,
+            )
 
     if args.finetune_epochs > 0:
         log.info("Fine-tuning pruned model for %d epochs...", args.finetune_epochs)

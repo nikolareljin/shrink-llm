@@ -237,7 +237,7 @@ def build_stage_args(
         ]
 
     elif stage == "quantize":
-        q = config.get("quantization", {})
+        q = config.get("quantization") or {}
         mode, precision = _validated_quantization_settings(config)
         args = [
             "--output",

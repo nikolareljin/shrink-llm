@@ -112,7 +112,7 @@ class TFLiteRunner:
 
 
 def get_runner(model_path: str, runtime: str):
-    if runtime == "onnxruntime":
+    if runtime in ("onnxruntime", "onnxruntime_mobile"):
         return ONNXRuntimeRunner(model_path)
     elif runtime == "tflite":
         return TFLiteRunner(model_path)
@@ -184,7 +184,9 @@ def main() -> None:
     )
     parser.add_argument("--task", required=True, choices=["ocr", "legal", "audio"])
     parser.add_argument(
-        "--runtime", default="onnxruntime", choices=["onnxruntime", "tflite", "coreml"]
+        "--runtime",
+        default="onnxruntime",
+        choices=["onnxruntime", "onnxruntime_mobile", "tflite", "coreml"],
     )
     parser.add_argument("--dataset", type=Path, help="Evaluation dataset directory")
     parser.add_argument("--warmup-runs", type=int, default=10)
