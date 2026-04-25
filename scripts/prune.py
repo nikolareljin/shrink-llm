@@ -96,8 +96,13 @@ class HeadImportanceScorer:
                 model_inputs = {k: v for k, v in batch.items() if k != "labels"}
                 try:
                     self.model(**model_inputs, output_attentions=True)
-                except TypeError:
-                    self.model(**model_inputs)
+                except TypeError as exc:
+                    if "unexpected keyword argument" in str(exc) and "output_attentions" in str(
+                        exc
+                    ):
+                        self.model(**model_inputs)
+                    else:
+                        raise
                 for name, importance in self.head_importance.items():
                     scores.setdefault(name, []).append(importance.cpu())
 
