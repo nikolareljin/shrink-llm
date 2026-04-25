@@ -189,7 +189,10 @@ def main() -> None:
     if args.mode == "gptq":
         if not args.model_id:
             parser.error("--model-id is required for GPTQ mode")
-        gptq_quantize(args.model_id, args.output, bits=4)
+        gptq_bits_by_precision = {"int4": 4, "int8": 8}
+        if args.precision not in gptq_bits_by_precision:
+            parser.error(f"--precision must be one of {list(gptq_bits_by_precision)} for GPTQ mode")
+        gptq_quantize(args.model_id, args.output, bits=gptq_bits_by_precision[args.precision])
     elif not args.input:
         parser.error("--input is required for non-GPTQ modes")
     elif args.precision == "fp16":

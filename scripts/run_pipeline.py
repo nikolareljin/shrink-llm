@@ -63,11 +63,16 @@ def order_stages(requested_stages: Iterable[str]) -> list[str]:
     return [stage for stage in VALID_STAGES if stage in requested]
 
 
-def validate_stage_selection(stages: Iterable[str]) -> None:
+def validate_stage_selection(stages: Iterable[str], config: dict | None = None) -> None:
     stages = list(stages)
     selected = set(stages)
+    prerequisites = dict(STAGE_PREREQUISITES)
+    if config is not None:
+        mode, _ = _validated_quantization_settings(config)
+        if mode == "gptq":
+            prerequisites["quantize"] = prerequisites.get("quantize", set()) - {"export"}
     for stage in stages:
-        missing = sorted(STAGE_PREREQUISITES.get(stage, set()) - selected)
+        missing = sorted(prerequisites.get(stage, set()) - selected)
         if missing:
             missing_list = ", ".join(missing)
             raise ValueError(f"Stage '{stage}' requires stage(s): {missing_list}")
@@ -118,7 +123,6 @@ def _validated_quantization_settings(config: dict) -> tuple[str, str]:
 
 
 _ONNX_REQUIRED_STAGES = {
-    "quantize",
     "convert_tflite",
     "convert_coreml",
     "convert_onnx_mobile",
@@ -483,7 +487,7 @@ def main() -> None:
     requested_stages = [s.strip() for s in args.stages.split(",")]
     stages = order_stages(requested_stages)
     try:
-        validate_stage_selection(stages)
+        validate_stage_selection(stages, config)
         _validate_gptq_stage_compat(config, stages)
     except ValueError as exc:
         parser.error(str(exc))
