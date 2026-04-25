@@ -64,6 +64,7 @@ def order_stages(requested_stages: Iterable[str]) -> list[str]:
 
 
 def validate_stage_selection(stages: Iterable[str]) -> None:
+    stages = list(stages)
     selected = set(stages)
     for stage in stages:
         missing = sorted(STAGE_PREREQUISITES.get(stage, set()) - selected)
@@ -290,14 +291,34 @@ def build_stage_args(
 
     elif stage == "convert_tflite":
         m = config.get("mobile", {}).get("android", {})
-        return [
+        quantization = m.get("quantization", "int8")
+        representative_dataset = None
+
+        if quantization == "int8":
+            representative_dataset = (
+                m.get("representative_dataset")
+                or config.get("quantization", {}).get("calibration_data")
+                or config.get("benchmark", {}).get("dataset")
+            )
+            if not representative_dataset:
+                log.warning(
+                    "convert_tflite requested quantization='int8' but no representative dataset "
+                    "was configured (checked mobile.android.representative_dataset, "
+                    "quantization.calibration_data, benchmark.dataset). Downgrading to 'fp16'."
+                )
+                quantization = "fp16"
+
+        args = [
             "--input",
             current_onnx_input,
             "--output",
             str(output_dir / f"{model_label}.tflite"),
             "--quantization",
-            m.get("quantization", "int8"),
+            quantization,
         ]
+        if representative_dataset and quantization == "int8":
+            args.extend(["--representative-dataset", str(representative_dataset)])
+        return args
 
     elif stage == "convert_coreml":
         m = config.get("mobile", {}).get("ios", {})
