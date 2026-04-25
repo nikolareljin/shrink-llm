@@ -313,6 +313,24 @@ def build_stage_args(
                     "quantization.calibration_data, benchmark.dataset). Downgrading to 'fp16'."
                 )
                 quantization = "fp16"
+            else:
+                dataset_path = Path(representative_dataset)
+                if not dataset_path.exists() or not dataset_path.is_dir():
+                    log.warning(
+                        "convert_tflite requested quantization='int8' but representative dataset "
+                        "path '%s' does not exist or is not a directory. Downgrading to 'fp16'.",
+                        dataset_path,
+                    )
+                    representative_dataset = None
+                    quantization = "fp16"
+                elif not any(dataset_path.glob("*.npy")):
+                    log.warning(
+                        "convert_tflite requested quantization='int8' but representative dataset "
+                        "directory '%s' contains no '*.npy' files. Downgrading to 'fp16'.",
+                        dataset_path,
+                    )
+                    representative_dataset = None
+                    quantization = "fp16"
 
         args = [
             "--input",
