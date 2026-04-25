@@ -183,16 +183,22 @@ def main() -> None:
     parser.add_argument("--model-id", help="HuggingFace model ID for GPTQ mode")
     args = parser.parse_args()
 
+    _valid_precisions = {"dynamic": {"int8", "fp16"}, "static": {"int8"}, "gptq": {"int4", "int8"}}
+    allowed = _valid_precisions.get(args.mode, {"int8", "fp16"})
+    if args.precision not in allowed:
+        parser.error(
+            f"--precision '{args.precision}' is not supported for mode '{args.mode}'. "
+            f"Allowed: {sorted(allowed)}"
+        )
+
     args.output.parent.mkdir(parents=True, exist_ok=True)
     skip_ops = set(args.skip_ops.split(",")) if args.skip_ops else set()
 
     if args.mode == "gptq":
         if not args.model_id:
             parser.error("--model-id is required for GPTQ mode")
-        gptq_bits_by_precision = {"int4": 4, "int8": 8}
-        if args.precision not in gptq_bits_by_precision:
-            parser.error(f"--precision must be one of {list(gptq_bits_by_precision)} for GPTQ mode")
-        gptq_quantize(args.model_id, args.output, bits=gptq_bits_by_precision[args.precision])
+        gptq_bits = {"int4": 4, "int8": 8}
+        gptq_quantize(args.model_id, args.output, bits=gptq_bits[args.precision])
     elif not args.input:
         parser.error("--input is required for non-GPTQ modes")
     elif args.precision == "fp16":
