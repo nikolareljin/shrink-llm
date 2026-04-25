@@ -380,7 +380,7 @@ def build_stage_args(
             "--input",
             current_onnx_input,
             "--output",
-            str(output_dir / f"{model_label}.tflite"),
+            str(output_dir / f"{Path(current_onnx_input).stem}.tflite"),
             "--quantization",
             quantization,
         ]
@@ -394,7 +394,7 @@ def build_stage_args(
             "--input",
             current_onnx_input,
             "--output",
-            str(output_dir / f"{model_label}.mlpackage"),
+            str(output_dir / f"{Path(current_onnx_input).stem}.mlpackage"),
             "--minimum-deployment-target",
             m.get("deployment_target", "iOS16"),
             "--compute-units",
@@ -408,19 +408,20 @@ def build_stage_args(
             "--input",
             current_onnx_input,
             "--output",
-            str(output_dir / f"{model_label}_mobile.onnx"),
+            str(output_dir / f"{Path(current_onnx_input).stem}_mobile.onnx"),
         ]
 
     elif stage == "benchmark":
         b = config.get("benchmark", {})
         runtime = b.get("runtime", "onnxruntime")
+        input_stem = Path(current_onnx_input).stem
         _runtime_model = {
-            "tflite": str(output_dir / f"{model_label}.tflite"),
-            "coreml": str(output_dir / f"{model_label}.mlpackage"),
-            "onnxruntime_mobile": str(output_dir / f"{model_label}_mobile.onnx"),
+            "tflite": str(output_dir / f"{input_stem}.tflite"),
+            "coreml": str(output_dir / f"{input_stem}.mlpackage"),
+            "onnxruntime_mobile": str(output_dir / f"{input_stem}_mobile.onnx"),
         }
         benchmark_model = _runtime_model.get(runtime, current_onnx_input)
-        result_name = str(state.get("current_onnx_label", Path(current_onnx_input).stem))
+        result_name = Path(benchmark_model).stem
         args = [
             "--model",
             benchmark_model,
