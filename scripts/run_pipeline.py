@@ -402,14 +402,21 @@ def build_stage_args(
 
     elif stage == "benchmark":
         b = config.get("benchmark", {})
+        runtime = b.get("runtime", "onnxruntime")
+        _runtime_model = {
+            "tflite": str(output_dir / f"{model_label}.tflite"),
+            "coreml": str(output_dir / f"{model_label}.mlpackage"),
+            "onnxruntime_mobile": str(output_dir / f"{model_label}_mobile.onnx"),
+        }
+        benchmark_model = _runtime_model.get(runtime, current_onnx_input)
         result_name = str(state.get("current_onnx_label", Path(current_onnx_input).stem))
         args = [
             "--model",
-            current_onnx_input,
+            benchmark_model,
             "--task",
             task,
             "--runtime",
-            b.get("runtime", "onnxruntime"),
+            runtime,
             "--warmup-runs",
             str(b.get("warmup_runs", 10)),
             "--benchmark-runs",

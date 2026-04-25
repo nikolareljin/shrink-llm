@@ -160,7 +160,7 @@ def main() -> None:
     parser.add_argument(
         "--precision",
         default="int8",
-        choices=["int8", "int4", "fp16", "mixed"],
+        choices=["int8", "int4", "fp16"],
         help="Target precision (default: int8)",
     )
     parser.add_argument(
@@ -191,7 +191,10 @@ def main() -> None:
             f"Allowed: {sorted(allowed)}"
         )
 
-    args.output.parent.mkdir(parents=True, exist_ok=True)
+    if args.mode == "gptq":
+        args.output.mkdir(parents=True, exist_ok=True)
+    else:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
     skip_ops = set(args.skip_ops.split(",")) if args.skip_ops else set()
 
     if args.mode == "gptq":
