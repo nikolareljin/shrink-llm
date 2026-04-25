@@ -153,7 +153,9 @@ def _log_size_comparison(before: Path, after: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Quantize an ONNX model")
-    parser.add_argument("--input", required=True, type=Path, help="Input ONNX model path")
+    parser.add_argument(
+        "--input", type=Path, help="Input ONNX model path (required for non-GPTQ modes)"
+    )
     parser.add_argument("--output", required=True, type=Path, help="Output quantized model path")
     parser.add_argument(
         "--precision",
@@ -188,6 +190,8 @@ def main() -> None:
         if not args.model_id:
             parser.error("--model-id is required for GPTQ mode")
         gptq_quantize(args.model_id, args.output, bits=4)
+    elif not args.input:
+        parser.error("--input is required for non-GPTQ modes")
     elif args.precision == "fp16":
         fp16_quantize(args.input, args.output)
     elif args.mode == "static":

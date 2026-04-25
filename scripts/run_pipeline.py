@@ -74,7 +74,14 @@ def validate_stage_selection(stages: Iterable[str]) -> None:
 
 
 def _validated_quantization_settings(config: dict) -> tuple[str, str]:
-    q = config.get("quantization", {})
+    q = config.get("quantization")
+    if q is None:
+        q = {}
+    elif not isinstance(q, dict):
+        raise ValueError(
+            "Invalid 'quantization' configuration: expected a mapping/object, "
+            f"got {type(q).__name__}."
+        )
     precision = str(q.get("precision", "int8")).lower()
     mode = str(q.get("mode", "dynamic")).lower()
     supported_modes = {"dynamic", "static", "gptq"}
@@ -229,8 +236,6 @@ def build_stage_args(
         q = config.get("quantization", {})
         mode, precision = _validated_quantization_settings(config)
         args = [
-            "--input",
-            onnx_path,
             "--output",
             quant_path,
             "--precision",
@@ -238,6 +243,10 @@ def build_stage_args(
             "--mode",
             mode,
         ]
+        if mode == "gptq":
+            args += ["--model-id", model_id]
+        else:
+            args = ["--input", onnx_path] + args
         if mode == "static":
             calibration_data = (
                 q.get("calibration_data")
