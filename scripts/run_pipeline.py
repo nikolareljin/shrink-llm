@@ -419,6 +419,8 @@ def main() -> None:
     args = parser.parse_args()
 
     config = load_config(args.config)
+    if not isinstance(config, dict):
+        parser.error(f"Config file must be a YAML mapping, got {type(config).__name__}")
 
     if not config.get("model"):
         parser.error("Config must specify a non-empty 'model' field")
