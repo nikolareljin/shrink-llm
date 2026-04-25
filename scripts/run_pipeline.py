@@ -63,6 +63,13 @@ def order_stages(requested_stages: Iterable[str]) -> list[str]:
     return [stage for stage in VALID_STAGES if stage in requested]
 
 
+_RUNTIME_CONVERT_STAGE = {
+    "tflite": "convert_tflite",
+    "coreml": "convert_coreml",
+    "onnxruntime_mobile": "convert_onnx_mobile",
+}
+
+
 def validate_stage_selection(stages: Iterable[str], config: dict | None = None) -> None:
     stages = list(stages)
     selected = set(stages)
@@ -71,6 +78,10 @@ def validate_stage_selection(stages: Iterable[str], config: dict | None = None) 
         mode, _ = _validated_quantization_settings(config)
         if mode == "gptq":
             prerequisites["quantize"] = prerequisites.get("quantize", set()) - {"export"}
+        runtime = (config.get("benchmark") or {}).get("runtime", "onnxruntime")
+        convert_stage = _RUNTIME_CONVERT_STAGE.get(runtime)
+        if convert_stage:
+            prerequisites["benchmark"] = prerequisites.get("benchmark", set()) | {convert_stage}
     for stage in stages:
         missing = sorted(prerequisites.get(stage, set()) - selected)
         if missing:
@@ -271,7 +282,7 @@ def build_stage_args(
         return args
 
     elif stage == "prune":
-        p = config.get("pruning", {})
+        p = config.get("pruning") or {}
         return [
             "--model",
             model_id,
@@ -288,7 +299,7 @@ def build_stage_args(
         ]
 
     elif stage == "distill":
-        d = config.get("distillation", {})
+        d = config.get("distillation") or {}
         teacher = config.get("teacher", "")
         if not teacher:
             log.warning("Distill stage requested but 'teacher' not set in config, skipping")
