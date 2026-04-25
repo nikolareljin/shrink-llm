@@ -87,6 +87,12 @@ def _validated_quantization_settings(config: dict) -> tuple[str, str]:
             f"Unsupported quantization mode '{mode}'. Supported modes: {supported_modes_list}."
         )
 
+    if mode == "static" and precision == "fp16":
+        raise ValueError(
+            "quantization.mode='static' requires calibration data and only supports int8 precision. "
+            "Use precision='int8' for static quantization, or switch to mode='dynamic' for fp16."
+        )
+
     if mode == "gptq":
         if precision not in gptq_precisions:
             supported_precisions_list = ", ".join(sorted(gptq_precisions))

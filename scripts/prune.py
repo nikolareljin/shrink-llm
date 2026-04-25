@@ -354,7 +354,9 @@ def main() -> None:
             log.info("Head importance scores computed for %d attention layers", len(scores))
             for layer_name, layer_scores in scores.items():
                 n_heads = len(layer_scores)
-                n_prune = min(n_heads, max(1 if args.sparsity > 0 else 0, round(n_heads * args.sparsity)))
+                n_prune = min(
+                    n_heads, max(1 if args.sparsity > 0 else 0, round(n_heads * args.sparsity))
+                )
                 log.info("Layer %s: pruning %d/%d heads", layer_name, n_prune, n_heads)
                 if n_prune > 0:
                     _, prune_indices = layer_scores.topk(n_prune, largest=False)
