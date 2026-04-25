@@ -422,12 +422,18 @@ def main() -> None:
         log.info("Applied magnitude pruning with sparsity=%.2f", args.sparsity)
 
     after_params = count_parameters(model)
-    reduction = (1 - after_params / before_params) * 100
-    log.info("Parameters after pruning: %s (%.1f%% reduction)", f"{after_params:,}", reduction)
-    if args.method in {"attention_heads", "mlp", "magnitude"}:
+    if args.method == "layers":
+        reduction = (1 - after_params / before_params) * 100
+        log.info("Parameters after pruning: %s (%.1f%% reduction)", f"{after_params:,}", reduction)
+    else:
         nonzero = count_nonzero_parameters(model)
         sparsity_pct = (1 - nonzero / max(1, before_params)) * 100
-        log.info("Nonzero parameters: %s (%.1f%% sparsity)", f"{nonzero:,}", sparsity_pct)
+        log.info(
+            "Parameters: %s total, %s nonzero (%.1f%% sparsity)",
+            f"{after_params:,}",
+            f"{nonzero:,}",
+            sparsity_pct,
+        )
 
     if args.finetune_epochs > 0:
         log.info("Fine-tuning pruned model for %d epochs...", args.finetune_epochs)

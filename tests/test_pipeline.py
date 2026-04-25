@@ -106,7 +106,7 @@ class TestBuildStageArgs:
         config["quantization"] = {"precision": "int4", "mode": "gptq"}
 
         with pytest.raises(ValueError, match="gptq"):
-            _validate_gptq_stage_compat(config, ["prune", "quantize", "benchmark"])
+            _validate_gptq_stage_compat(config, ["prune", "quantize", "convert_coreml"])
 
     def test_validate_gptq_stage_compat_allows_non_onnx_stages(self):
         from scripts.run_pipeline import _validate_gptq_stage_compat
@@ -114,7 +114,7 @@ class TestBuildStageArgs:
         config = _base_config()
         config["quantization"] = {"precision": "int4", "mode": "gptq"}
 
-        _validate_gptq_stage_compat(config, ["prune", "distill"])
+        _validate_gptq_stage_compat(config, ["prune", "quantize", "distill"])
 
     def test_init_pipeline_state_rejects_unsupported_precision_for_dynamic_mode(self, tmp_path):
         from scripts.run_pipeline import init_pipeline_state
