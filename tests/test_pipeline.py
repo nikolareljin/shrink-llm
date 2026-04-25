@@ -89,14 +89,32 @@ class TestBuildStageArgs:
         assert args[args.index("--calibration-data") + 1] == "datasets/legal/eval"
         assert args[args.index("--skip-ops") + 1] == "Softmax,LayerNormalization"
 
-    def test_init_pipeline_state_rejects_gptq(self, tmp_path):
+    def test_init_pipeline_state_gptq_returns_directory_artifact(self, tmp_path):
         from scripts.run_pipeline import init_pipeline_state
 
         config = _base_config()
         config["quantization"] = {"precision": "int4", "mode": "gptq"}
 
+        state = init_pipeline_state(config, tmp_path)
+        assert "_gptq" in str(state["quant_path"])
+        assert not str(state["quant_path"]).endswith(".onnx")
+
+    def test_validate_gptq_stage_compat_raises_for_onnx_stages(self):
+        from scripts.run_pipeline import _validate_gptq_stage_compat
+
+        config = _base_config()
+        config["quantization"] = {"precision": "int4", "mode": "gptq"}
+
         with pytest.raises(ValueError, match="gptq"):
-            init_pipeline_state(config, tmp_path)
+            _validate_gptq_stage_compat(config, ["prune", "quantize", "benchmark"])
+
+    def test_validate_gptq_stage_compat_allows_non_onnx_stages(self):
+        from scripts.run_pipeline import _validate_gptq_stage_compat
+
+        config = _base_config()
+        config["quantization"] = {"precision": "int4", "mode": "gptq"}
+
+        _validate_gptq_stage_compat(config, ["prune", "distill"])
 
     def test_init_pipeline_state_rejects_unsupported_precision_for_dynamic_mode(self, tmp_path):
         from scripts.run_pipeline import init_pipeline_state

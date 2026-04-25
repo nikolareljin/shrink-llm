@@ -42,13 +42,27 @@ class HeadImportanceScorer:
             if isinstance(output, torch.Tensor):
                 attn_weights = output
             elif isinstance(output, tuple) and len(output) > 1:
-                # Models differ: GPT-2 returns (attn_out, present, attn_weights) so weights
-                # are at index 2, others use index 1. Scan in reverse for the last tensor
-                # with ndim >= 3 (attention weight shape is always at least (B, heads, S, S)).
+                # Attention weight tensors are square in their last two dims ((B, heads, S, S)
+                # or (B, S, S)). Hidden states like attn_output are (B, S, hidden) — non-square.
+                # Prefer 4D with second dim == num_heads; fall back to any 3D square tensor.
                 for elem in reversed(output):
-                    if isinstance(elem, torch.Tensor) and elem.ndim >= 3:
+                    if (
+                        isinstance(elem, torch.Tensor)
+                        and elem.ndim == 4
+                        and elem.shape[1] == module.num_heads
+                        and elem.shape[-2] == elem.shape[-1]
+                    ):
                         attn_weights = elem
                         break
+                if attn_weights is None:
+                    for elem in reversed(output):
+                        if (
+                            isinstance(elem, torch.Tensor)
+                            and elem.ndim == 3
+                            and elem.shape[-2] == elem.shape[-1]
+                        ):
+                            attn_weights = elem
+                            break
             if not isinstance(attn_weights, torch.Tensor):
                 return
             if attn_weights.ndim == 4:
