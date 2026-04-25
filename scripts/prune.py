@@ -331,7 +331,7 @@ def count_parameters(model: nn.Module) -> int:
 
 
 def count_nonzero_parameters(model: nn.Module) -> int:
-    return sum(int((p != 0).sum()) for p in model.parameters())
+    return sum(p.count_nonzero().item() for p in model.parameters())
 
 
 def main() -> None:
