@@ -91,7 +91,7 @@ def _validated_quantization_settings(config: dict) -> tuple[str, str]:
     mode = str(q.get("mode", "dynamic")).lower()
     supported_modes = {"dynamic", "static", "gptq"}
     supported_precisions = {"int8", "fp16"}
-    gptq_precisions = {"int4", "mixed", "int8", "fp16"}
+    gptq_precisions = {"int4", "int8"}
 
     if mode not in supported_modes:
         supported_modes_list = ", ".join(sorted(supported_modes))
