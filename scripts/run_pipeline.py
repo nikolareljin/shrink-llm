@@ -445,17 +445,19 @@ def build_stage_args(
         if b.get("dataset"):
             args += ["--dataset", b["dataset"]]
         criteria = config.get("success_criteria") or {}
-        _known_criteria = {
-            "max_size_mb",
-            "max_latency_ms",
-            "min_accuracy",
-            "min_f1",
-        }
-        unsupported = sorted(set(criteria) - _known_criteria)
-        if unsupported:
+        _implemented_criteria = {"max_size_mb", "max_latency_ms", "min_accuracy", "min_f1"}
+        _known_unimplemented = {"max_cer", "max_accuracy_drop_pct"}
+        _known_criteria = _implemented_criteria | _known_unimplemented
+        for key in sorted(set(criteria) - _known_criteria):
+            log.warning(
+                "Unrecognized success_criteria key %r will be ignored by benchmark gate translation",
+                key,
+            )
+        for key in sorted(set(criteria) & _known_unimplemented):
             log.debug(
-                "success_criteria keys not translated into benchmark args by this stage: %s",
-                ", ".join(unsupported),
+                "success_criteria key %r is recognized but not yet wired to benchmark args; "
+                "gate will not be checked",
+                key,
             )
         if criteria.get("max_size_mb") is not None:
             args += ["--max-size-mb", str(criteria["max_size_mb"])]
