@@ -460,15 +460,20 @@ def _sha256_file(path: Path) -> str:
     return f"sha256:{hashlib.sha256(path.read_bytes()).hexdigest()}"
 
 
-def _snapshot_dir(d: Path) -> set[Path]:
-    return set(d.rglob("*")) if d.exists() else set()
+def _snapshot_dir(d: Path) -> dict[Path, float]:
+    """Return {path: mtime} for all files under d, used to detect new and overwritten files."""
+    if not d.exists():
+        return {}
+    return {p: p.stat().st_mtime for p in d.rglob("*") if p.is_file()}
 
 
-def _collect_new_files(output_dir: Path, before: set[Path]) -> list[dict]:
-    after = set(output_dir.rglob("*"))
+def _collect_new_files(output_dir: Path, before: dict[Path, float]) -> list[dict]:
+    """Return files created or overwritten since the before snapshot, excluding manifest.json."""
     result = []
-    for p in sorted(after - before):
-        if p.is_file() and p.name != "manifest.json":
+    for p in sorted(output_dir.rglob("*")):
+        if not p.is_file() or p.name == "manifest.json":
+            continue
+        if p not in before or p.stat().st_mtime > before[p]:
             size_mb = round(p.stat().st_size / 1_048_576, 3)
             result.append({"path": str(p.relative_to(output_dir)), "size_mb": size_mb})
     return result
