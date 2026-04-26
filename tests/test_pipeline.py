@@ -347,6 +347,22 @@ class TestManifestHelpers:
         assert "model.onnx" in paths
         assert "manifest.json" not in paths
 
+    def test_collect_new_files_includes_subdir_manifest_json(self, tmp_path):
+        from scripts.run_pipeline import _collect_new_files, _snapshot_dir
+
+        # Only output_dir/manifest.json is excluded; nested ones are legitimate artifacts
+        before = _snapshot_dir(tmp_path)
+        sub = tmp_path / "benchmarks"
+        sub.mkdir()
+        (sub / "manifest.json").write_text("{}")
+
+        result = _collect_new_files(tmp_path, before)
+
+        # benchmarks/ is a new dir → recorded as single directory artifact
+        assert any(r["path"] == "benchmarks" for r in result)
+        # the nested manifest.json must NOT appear as a separate entry
+        assert not any(r["path"] == "benchmarks/manifest.json" for r in result)
+
     def test_collect_new_files_reports_size(self, tmp_path):
         from scripts.run_pipeline import _collect_new_files, _snapshot_dir
 

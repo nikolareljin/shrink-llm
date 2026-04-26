@@ -106,6 +106,39 @@ class TestLatencyProfiler:
         assert result["mean"] >= 0
 
 
+class TestMainExitCode:
+    def test_exits_1_when_gate_fails(self, monkeypatch, tmp_path):
+        from unittest.mock import MagicMock, patch
+
+        model_file = tmp_path / "model.onnx"
+        model_file.write_bytes(b"\x00" * 1_000_000)  # 1 MB
+
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "benchmark",
+                "--model",
+                str(model_file),
+                "--task",
+                "legal",
+                "--max-size-mb",
+                "0.001",  # 1 MB > 0.001 MB → gate fails
+                "--benchmark-runs",
+                "2",
+                "--warmup-runs",
+                "0",
+            ],
+        )
+
+        with patch("scripts.benchmark.get_runner", return_value=MagicMock(return_value=[])):
+            with pytest.raises(SystemExit) as exc_info:
+                from scripts.benchmark import main
+
+                main()
+
+        assert exc_info.value.code == 1
+
+
 def _make_result(**overrides):
     from scripts.benchmark import BenchmarkResult
 
