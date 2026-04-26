@@ -188,3 +188,75 @@ class TestBuildStageArgs:
 
         args = build_stage_args("benchmark", config, tmp_path, state)
         assert args[args.index("--output-json") + 1].endswith("demo-model_int8.json")
+
+
+class TestUpdateManifest:
+    def test_creates_manifest_when_missing(self, tmp_path):
+        import json
+
+        from scripts.run_pipeline import _update_manifest
+
+        path = tmp_path / "manifest.json"
+        _update_manifest(path, "export", ["--model", "m"], True)
+
+        data = json.loads(path.read_text())
+        assert len(data["stages"]) == 1
+        rec = data["stages"][0]
+        assert rec["stage"] == "export"
+        assert rec["args"] == ["--model", "m"]
+        assert rec["status"] == "ok"
+
+    def test_appends_to_existing_manifest(self, tmp_path):
+        import json
+
+        from scripts.run_pipeline import _update_manifest
+
+        path = tmp_path / "manifest.json"
+        _update_manifest(path, "export", [], True)
+        _update_manifest(path, "quantize", [], False)
+
+        data = json.loads(path.read_text())
+        assert len(data["stages"]) == 2
+        assert data["stages"][0]["stage"] == "export"
+        assert data["stages"][1]["stage"] == "quantize"
+        assert data["stages"][1]["status"] == "failed"
+
+    def test_resets_on_malformed_json(self, tmp_path):
+        import json
+
+        from scripts.run_pipeline import _update_manifest
+
+        path = tmp_path / "manifest.json"
+        path.write_text("not valid json {{")
+        _update_manifest(path, "prune", [], True)
+
+        data = json.loads(path.read_text())
+        assert len(data["stages"]) == 1
+        assert data["stages"][0]["stage"] == "prune"
+
+    def test_resets_on_non_dict_json(self, tmp_path):
+        import json
+
+        from scripts.run_pipeline import _update_manifest
+
+        path = tmp_path / "manifest.json"
+        path.write_text(json.dumps([1, 2, 3]))
+        _update_manifest(path, "distill", [], True)
+
+        data = json.loads(path.read_text())
+        assert len(data["stages"]) == 1
+        assert data["stages"][0]["stage"] == "distill"
+
+    def test_resets_stages_when_not_list(self, tmp_path):
+        import json
+
+        from scripts.run_pipeline import _update_manifest
+
+        path = tmp_path / "manifest.json"
+        path.write_text(json.dumps({"stages": "corrupted", "extra": "kept"}))
+        _update_manifest(path, "benchmark", [], True)
+
+        data = json.loads(path.read_text())
+        assert data["extra"] == "kept"
+        assert len(data["stages"]) == 1
+        assert data["stages"][0]["stage"] == "benchmark"
