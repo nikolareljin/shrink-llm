@@ -13,7 +13,7 @@ All notable changes to this project will be documented in this file.
 - Per-stage `exit_code` and structured `error` message in manifest stage records; failure records now include the non-zero exit code and a human-readable reason.
 - Benchmark acceptance gates: `--max-size-mb`, `--max-latency-ms-p95`, and `--min-accuracy` CLI args; `benchmark.py` exits with code 1 when any threshold is not met, resolving issue #24.
 - `gate_results` (per-criterion pass/fail map) and `passed` (overall boolean) fields added to `BenchmarkResult` and included in JSON output.
-- Pipeline runner automatically passes `success_criteria` from the YAML config to the benchmark stage as gate thresholds.
+- Pipeline runner forwards the currently wired YAML `success_criteria` thresholds to the benchmark stage: `max_size_mb` and `max_latency_ms`.
 
 ## [0.2.0] - 2026-04-21
 
