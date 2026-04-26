@@ -7,8 +7,10 @@ Runs stages: prune → distill → export → quantize → convert → benchmark
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
+import stat as _stat
 import subprocess
 import sys
 from collections.abc import Iterable
@@ -40,17 +42,17 @@ STAGE_PREREQUISITES = {
 }
 
 
-def run_stage(script: str, args_list: list[str], dry_run: bool = False) -> bool:
+def run_stage(script: str, args_list: list[str], dry_run: bool = False) -> tuple[int, bool]:
     cmd = [sys.executable, f"scripts/{script}.py"] + args_list
     log.info("Running: %s", " ".join(cmd))
     if dry_run:
         log.info("[DRY RUN] Skipping execution.")
-        return True
+        return 0, True
     result = subprocess.run(cmd, capture_output=False)
     if result.returncode != 0:
         log.error("Stage '%s' failed with return code %d", script, result.returncode)
-        return False
-    return True
+        return result.returncode, False
+    return result.returncode, True
 
 
 def load_config(config_path: Path) -> dict:
@@ -443,18 +445,215 @@ def build_stage_args(
         ]
         if b.get("dataset"):
             args += ["--dataset", b["dataset"]]
+        criteria = config.get("success_criteria") or {}
+        if not isinstance(criteria, dict):
+            log.warning(
+                "success_criteria must be a mapping; got %s — ignoring",
+                type(criteria).__name__,
+            )
+            criteria = {}
+        _implemented_criteria = {"max_size_mb", "max_latency_ms"}
+        _known_unimplemented = {"max_cer", "max_accuracy_drop_pct", "min_accuracy", "min_f1"}
+        _known_criteria = _implemented_criteria | _known_unimplemented
+        for key in sorted(set(criteria) - _known_criteria):
+            log.warning(
+                "Unrecognized success_criteria key %r will be ignored by benchmark gate translation",
+                key,
+            )
+        for key in sorted(set(criteria) & _known_unimplemented):
+            log.debug(
+                "success_criteria key %r is recognized but not yet wired to benchmark args; "
+                "gate will not be checked",
+                key,
+            )
+        if criteria.get("max_size_mb") is not None:
+            args += ["--max-size-mb", str(criteria["max_size_mb"])]
+        if criteria.get("max_latency_ms") is not None:
+            args += ["--max-latency-ms-p95", str(criteria["max_latency_ms"])]
         return args
 
     return []
 
 
-def _update_manifest(manifest_path: Path, stage: str, args_list: list[str], success: bool) -> None:
+def _sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    try:
+        with path.open("rb") as f:
+            for chunk in iter(lambda: f.read(8192), b""):
+                h.update(chunk)
+    except OSError as exc:
+        log.warning("Could not hash %s: %s — config_hash will be empty", path, exc)
+        return ""
+    return f"sha256:{h.hexdigest()}"
+
+
+def _dir_size(d: Path) -> int:
+    """Total byte size of all files recursively under d."""
+    return sum(f.stat().st_size for f in d.rglob("*") if f.is_file())
+
+
+def _snapshot_dir(d: Path, scan_root: Path | None = None) -> dict[Path, tuple[int, int]]:
+    """Return a recursive snapshot used to detect new or overwritten outputs.
+
+    Files at all depths are recorded as (mtime_ns, size).
+    Directories at all depths are recorded as (mtime_ns, st_nlink) — a
+    lightweight sentinel to detect new or structurally modified directories.
+
+    scan_root limits scanning to a subdirectory of d (e.g. output_dir/benchmarks)
+    when a stage is known to write only within that subtree.
+    """
+    root = scan_root if scan_root is not None else d
+    if not root.exists():
+        return {}
+    result: dict[Path, tuple[int, int]] = {}
+    for p in root.rglob("*"):
+        try:
+            s = p.stat()
+        except OSError as exc:
+            log.warning("Skipping unreadable path %s in snapshot: %s", p, exc)
+            continue
+        if _stat.S_ISREG(s.st_mode):
+            result[p] = (s.st_mtime_ns, s.st_size)
+        elif _stat.S_ISDIR(s.st_mode):
+            result[p] = (s.st_mtime_ns, s.st_nlink)
+    return result
+
+
+def _collect_new_files(
+    output_dir: Path,
+    before: dict[Path, tuple[int, int]],
+    scan_root: Path | None = None,
+) -> list[dict]:
+    """Return files and directories created or overwritten since the before snapshot.
+
+    Directories at any depth are recorded as single artifacts (total size = sum
+    of contained files) when they are new or their snapshot tuple changed
+    (mtime_ns, st_nlink). This covers both freshly-created and regenerated
+    package-format outputs like .mlpackage and GPTQ dirs. Files inside captured
+    directories are not listed separately. Pre-existing unchanged directories
+    are recursed into so new/changed files and sub-directories inside them are
+    not missed.
+
+    scan_root limits scanning to a subdirectory of output_dir when a stage is
+    known to write only within that subtree, reducing per-stage filesystem cost.
+    Artifact paths are always relative to output_dir regardless of scan_root.
+    """
+    root = scan_root if scan_root is not None else output_dir
+    skip_roots = {output_dir, root}
+    result: list[dict] = []
+
+    def _visit(path: Path) -> None:
+        rel_path = path.relative_to(output_dir)
+
+        try:
+            is_dir = path.is_dir()
+        except OSError as exc:
+            log.warning("Skipping unreadable or disappearing path %s: %s", path, exc)
+            return
+
+        if is_dir:
+            if path not in skip_roots:
+                try:
+                    s = path.stat()
+                    dir_tuple = (s.st_mtime_ns, s.st_nlink)
+                except OSError as exc:
+                    log.warning("Skipping unreadable directory %s: %s", path, exc)
+                    return
+                if path not in before or dir_tuple != before[path]:
+                    size_mb = round(_dir_size(path) / 1_000_000, 3)
+                    result.append({"path": str(rel_path), "size_mb": size_mb})
+                    return
+            try:
+                children = sorted(path.iterdir())
+            except OSError as exc:
+                log.warning("Skipping unreadable directory %s: %s", path, exc)
+                return
+            for child in children:
+                _visit(child)
+            return
+
+        if rel_path == Path("manifest.json"):
+            return
+
+        try:
+            stat = path.stat()
+        except OSError as exc:
+            log.warning("Skipping unreadable or disappearing file %s: %s", path, exc)
+            return
+        if path not in before or (stat.st_mtime_ns, stat.st_size) != before[path]:
+            size_mb = round(stat.st_size / 1_000_000, 3)
+            result.append({"path": str(rel_path), "size_mb": size_mb})
+
+    if not root.exists():
+        return result
+    _visit(root)
+    return result
+
+
+def _init_manifest(manifest_path: Path, config: dict, config_path: Path, stages: list[str]) -> None:
+    """Write pipeline-level metadata to the manifest file before stages run.
+
+    If a valid manifest already exists (e.g. from a prior run), unknown top-level
+    keys are preserved; only the per-run fields are reset.
+    """
+    _now = datetime.now(timezone.utc)
+    run_id = (
+        f"{config.get('task', 'unknown')}_"
+        f"{_now.strftime('%Y%m%d_%H%M%S')}_{_now.microsecond // 1000:03d}"
+    )
+    manifest: dict = {}
+    if manifest_path.exists():
+        try:
+            loaded = json.loads(manifest_path.read_text())
+            if isinstance(loaded, dict):
+                manifest = loaded
+            else:
+                log.warning(
+                    "Manifest %s contained %s JSON, expected object — replacing",
+                    manifest_path,
+                    type(loaded).__name__,
+                )
+        except (OSError, json.JSONDecodeError) as exc:
+            log.warning("Could not read manifest %s: %s — replacing", manifest_path, exc)
+    manifest.update(
+        {
+            "version": "1",
+            "pipeline_run_id": run_id,
+            "model_id": config.get("model", ""),
+            "task": config.get("task", ""),
+            "config_path": str(config_path),
+            "config_hash": _sha256_file(config_path) if config_path.exists() else "",
+            "total_stages": len(stages),
+            "stages": [],
+        }
+    )
+    manifest_path.write_text(json.dumps(manifest, indent=2))
+
+
+def _update_manifest(
+    manifest_path: Path,
+    stage: str,
+    args_list: list[str],
+    success: bool,
+    exit_code: int | None = None,
+    artifacts: list[dict] | None = None,
+    error: dict | None = None,
+) -> None:
     """Append a stage record to the pipeline manifest JSON."""
+    if success:
+        resolved_exit_code = 0 if exit_code is None else exit_code
+    else:
+        if exit_code is None or exit_code == 0:
+            raise ValueError(f"Failed stage '{stage}' must supply a non-zero exit_code")
+        resolved_exit_code = exit_code
     record: dict = {
         "stage": stage,
         "args": args_list,
         "status": "ok" if success else "failed",
         "timestamp": datetime.now(timezone.utc).isoformat(),
+        "exit_code": resolved_exit_code,
+        "artifacts": artifacts or [],
+        "error": error,
     }
     existing: dict = {"stages": []}
     if manifest_path.exists():
@@ -529,6 +728,11 @@ def main() -> None:
         "convert_onnx_mobile": "convert_to_onnx_mobile",
         "benchmark": "benchmark",
     }
+    # Stages that write only within a known subdirectory of output_dir.
+    # Limits the per-stage filesystem scan to that subtree instead of all of output_dir.
+    _stage_scan_subdirs: dict[str, str] = {
+        "benchmark": "benchmarks",
+    }
 
     manifest_path = args.output_dir / "manifest.json"
     state = init_pipeline_state(config, args.output_dir)
@@ -537,15 +741,38 @@ def main() -> None:
     for stage in unknown_stages:
         log.warning("Unknown stage '%s' — skipping", stage)
 
+    if not args.dry_run:
+        _init_manifest(manifest_path, config, args.config, stages)
+
     for stage in stages:
         stage_args = build_stage_args(stage, config, args.output_dir, state, dry_run=args.dry_run)
         if not stage_args and stage not in ("export",):
             log.warning("Stage '%s' produced no args, skipping", stage)
             continue
-        success = run_stage(script_map[stage], stage_args, dry_run=args.dry_run)
+        _subdir = _stage_scan_subdirs.get(stage)
+        scan_root = (args.output_dir / _subdir) if _subdir else None
+        before = _snapshot_dir(args.output_dir, scan_root=scan_root) if not args.dry_run else {}
+        exit_code, success = run_stage(script_map[stage], stage_args, dry_run=args.dry_run)
         results[stage] = "OK" if success else "FAILED"
         if not args.dry_run:
-            _update_manifest(manifest_path, stage, stage_args, success)
+            artifacts = _collect_new_files(args.output_dir, before, scan_root=scan_root)
+            error_obj = (
+                None
+                if success
+                else {
+                    "message": f"Stage '{stage}' exited with code {exit_code}",
+                    "exit_code": exit_code,
+                }
+            )
+            _update_manifest(
+                manifest_path,
+                stage,
+                stage_args,
+                success,
+                exit_code=exit_code,
+                artifacts=artifacts,
+                error=error_obj,
+            )
         if success:
             update_pipeline_state(stage, state, config, args.output_dir, dry_run=args.dry_run)
         if not success:

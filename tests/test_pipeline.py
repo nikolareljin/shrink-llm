@@ -205,6 +205,9 @@ class TestUpdateManifest:
         assert rec["stage"] == "export"
         assert rec["args"] == ["--model", "m"]
         assert rec["status"] == "ok"
+        assert rec["exit_code"] == 0
+        assert rec["artifacts"] == []
+        assert rec["error"] is None
 
     def test_appends_to_existing_manifest(self, tmp_path):
         import json
@@ -213,7 +216,7 @@ class TestUpdateManifest:
 
         path = tmp_path / "manifest.json"
         _update_manifest(path, "export", [], True)
-        _update_manifest(path, "quantize", [], False)
+        _update_manifest(path, "quantize", [], False, exit_code=1)
 
         data = json.loads(path.read_text())
         assert len(data["stages"]) == 2
@@ -260,3 +263,371 @@ class TestUpdateManifest:
         assert data["extra"] == "kept"
         assert len(data["stages"]) == 1
         assert data["stages"][0]["stage"] == "benchmark"
+
+    def test_records_exit_code_and_error_on_failure(self, tmp_path):
+        import json
+
+        from scripts.run_pipeline import _update_manifest
+
+        path = tmp_path / "manifest.json"
+        error = {"message": "Stage 'export' exited with code 1", "exit_code": 1}
+        _update_manifest(path, "export", [], False, exit_code=1, error=error)
+
+        data = json.loads(path.read_text())
+        rec = data["stages"][0]
+        assert rec["status"] == "failed"
+        assert rec["exit_code"] == 1
+        assert "exited with code 1" in rec["error"]["message"]
+        assert rec["error"]["exit_code"] == 1
+
+    def test_raises_when_failed_stage_missing_exit_code(self, tmp_path):
+        from scripts.run_pipeline import _update_manifest
+
+        path = tmp_path / "manifest.json"
+        with pytest.raises(ValueError, match="non-zero exit_code"):
+            _update_manifest(path, "quantize", [], False)
+
+    def test_raises_when_failed_stage_exit_code_is_zero(self, tmp_path):
+        from scripts.run_pipeline import _update_manifest
+
+        path = tmp_path / "manifest.json"
+        with pytest.raises(ValueError, match="non-zero exit_code"):
+            _update_manifest(path, "quantize", [], False, exit_code=0)
+
+    def test_records_artifacts_for_successful_stage(self, tmp_path):
+        import json
+
+        from scripts.run_pipeline import _update_manifest
+
+        path = tmp_path / "manifest.json"
+        artifacts = [{"path": "model_base.onnx", "size_mb": 42.5}]
+        _update_manifest(path, "export", [], True, exit_code=0, artifacts=artifacts)
+
+        data = json.loads(path.read_text())
+        rec = data["stages"][0]
+        assert rec["artifacts"] == [{"path": "model_base.onnx", "size_mb": 42.5}]
+
+
+class TestManifestHelpers:
+    def test_init_manifest_writes_metadata(self, tmp_path):
+        import json
+
+        from scripts.run_pipeline import _init_manifest
+
+        config = {"model": "org/demo-model", "task": "legal"}
+        config_path = tmp_path / "pipeline.yaml"
+        config_path.write_text("model: org/demo-model\ntask: legal\n")
+        manifest_path = tmp_path / "manifest.json"
+
+        _init_manifest(manifest_path, config, config_path, ["export", "quantize"])
+
+        data = json.loads(manifest_path.read_text())
+        assert data["version"] == "1"
+        assert data["model_id"] == "org/demo-model"
+        assert data["task"] == "legal"
+        assert data["total_stages"] == 2
+        assert data["config_hash"].startswith("sha256:")
+        assert "pipeline_run_id" in data
+        assert data["stages"] == []
+
+    def test_init_manifest_preserves_unknown_keys(self, tmp_path):
+        import json
+
+        from scripts.run_pipeline import _init_manifest
+
+        config = {"model": "org/model", "task": "ocr"}
+        config_path = tmp_path / "pipeline.yaml"
+        config_path.write_text("model: org/model\ntask: ocr\n")
+        manifest_path = tmp_path / "manifest.json"
+        manifest_path.write_text(json.dumps({"custom_key": "preserved", "stages": []}))
+
+        _init_manifest(manifest_path, config, config_path, ["export"])
+
+        data = json.loads(manifest_path.read_text())
+        assert data["custom_key"] == "preserved"
+        assert data["version"] == "1"
+        assert data["stages"] == []
+
+    def test_collect_new_files_excludes_manifest(self, tmp_path):
+        from scripts.run_pipeline import _collect_new_files, _snapshot_dir
+
+        before = _snapshot_dir(tmp_path)
+        (tmp_path / "model.onnx").write_bytes(b"\x00" * 1024)
+        (tmp_path / "manifest.json").write_text("{}")
+
+        result = _collect_new_files(tmp_path, before)
+
+        paths = [r["path"] for r in result]
+        assert "model.onnx" in paths
+        assert "manifest.json" not in paths
+
+    def test_collect_new_files_includes_subdir_manifest_json(self, tmp_path):
+        from scripts.run_pipeline import _collect_new_files, _snapshot_dir
+
+        # Only output_dir/manifest.json is excluded; nested ones are legitimate artifacts
+        before = _snapshot_dir(tmp_path)
+        sub = tmp_path / "benchmarks"
+        sub.mkdir()
+        (sub / "manifest.json").write_text("{}")
+
+        result = _collect_new_files(tmp_path, before)
+
+        # benchmarks/ is a new dir → recorded as single directory artifact
+        assert any(r["path"] == "benchmarks" for r in result)
+        # the nested manifest.json must NOT appear as a separate entry
+        assert not any(r["path"] == "benchmarks/manifest.json" for r in result)
+
+    def test_collect_new_files_detects_new_subdir_inside_preexisting_dir(self, tmp_path):
+        from scripts.run_pipeline import _collect_new_files, _snapshot_dir
+
+        # Pre-existing benchmarks/ dir; stage creates benchmarks/run_001/ inside it.
+        # Adding a subdir changes benchmarks/'s st_nlink so the whole dir is recorded
+        # as a single artifact (consistent with how new dirs are handled).
+        existing_dir = tmp_path / "benchmarks"
+        existing_dir.mkdir()
+        before = _snapshot_dir(tmp_path)
+
+        new_subdir = existing_dir / "run_001"
+        new_subdir.mkdir()
+        (new_subdir / "result.json").write_bytes(b"{}" * 500)
+
+        result = _collect_new_files(tmp_path, before)
+
+        paths = [r["path"] for r in result]
+        assert "benchmarks" in paths
+        assert not any("result.json" in p for p in paths)
+
+    def test_collect_new_files_reports_size(self, tmp_path):
+        from scripts.run_pipeline import _collect_new_files, _snapshot_dir
+
+        before = _snapshot_dir(tmp_path)
+        (tmp_path / "artifact.onnx").write_bytes(b"\x00" * 2_000_000)  # exactly 2 MB (1e6)
+
+        result = _collect_new_files(tmp_path, before)
+
+        assert len(result) == 1
+        assert result[0]["size_mb"] == pytest.approx(2.0, abs=0.001)
+
+    def test_collect_new_files_detects_overwritten_file(self, tmp_path):
+        import os
+
+        from scripts.run_pipeline import _collect_new_files, _snapshot_dir
+
+        artifact = tmp_path / "model.onnx"
+        artifact.write_bytes(b"\x00" * 512)
+        before = _snapshot_dir(tmp_path)
+        artifact.write_bytes(b"\x00" * 1024)  # overwrite same path with different size
+        # Force mtime_ns forward to guarantee detection on coarse-resolution filesystems
+        prev_mtime_ns = before[artifact][0]
+        os.utime(artifact, ns=(prev_mtime_ns + 1_000_000_000, prev_mtime_ns + 1_000_000_000))
+
+        result = _collect_new_files(tmp_path, before)
+
+        assert len(result) == 1
+        assert result[0]["path"] == "model.onnx"
+
+    def test_collect_new_files_detects_directory_artifact(self, tmp_path):
+        from scripts.run_pipeline import _collect_new_files, _snapshot_dir
+
+        before = _snapshot_dir(tmp_path)
+        pkg = tmp_path / "model.mlpackage"
+        pkg.mkdir()
+        (pkg / "weights.bin").write_bytes(b"\x00" * 1_000_000)
+        (pkg / "metadata.json").write_text("{}")
+
+        result = _collect_new_files(tmp_path, before)
+
+        assert len(result) == 1
+        assert result[0]["path"] == "model.mlpackage"
+        assert result[0]["size_mb"] == pytest.approx(1.0, abs=0.001)
+
+    def test_collect_new_files_records_changed_preexisting_dir_as_artifact(self, tmp_path):
+        from scripts.run_pipeline import _collect_new_files, _snapshot_dir
+
+        # Pre-existing subdir (e.g. benchmarks/) was there before the stage.
+        # Adding a file changes its mtime so the dir itself is recorded as a
+        # single artifact (same as new dirs).  Use scan_root when per-file
+        # granularity inside a container dir is needed (see benchmark stage).
+        existing_dir = tmp_path / "benchmarks"
+        existing_dir.mkdir()
+        before = _snapshot_dir(tmp_path)
+
+        (existing_dir / "result.json").write_bytes(b"{}" * 10)
+
+        result = _collect_new_files(tmp_path, before)
+
+        assert len(result) == 1
+        assert result[0]["path"] == "benchmarks"
+
+    def test_collect_new_files_with_scan_root_lists_individual_files_in_container(self, tmp_path):
+        from scripts.run_pipeline import _collect_new_files, _snapshot_dir
+
+        # With scan_root the container dir is in skip_roots so we recurse into it
+        # and capture the specific new file — this is the benchmark stage pattern.
+        existing_dir = tmp_path / "benchmarks"
+        existing_dir.mkdir()
+        before = _snapshot_dir(tmp_path, scan_root=existing_dir)
+
+        (existing_dir / "result.json").write_bytes(b"{}" * 10)
+
+        result = _collect_new_files(tmp_path, before, scan_root=existing_dir)
+
+        assert len(result) == 1
+        assert result[0]["path"] == "benchmarks/result.json"
+
+    def test_collect_new_files_detects_deep_file_in_preexisting_nested_dir(self, tmp_path):
+        from scripts.run_pipeline import _collect_new_files, _snapshot_dir
+
+        # Pre-existing benchmarks/run_001/ exists; stage adds a new file inside it (depth 2).
+        # benchmarks/ mtime is unchanged (no direct children added), so we recurse into it.
+        # run_001/ mtime changes (new file added), so it is recorded as a dir artifact.
+        run_dir = tmp_path / "benchmarks" / "run_001"
+        run_dir.mkdir(parents=True)
+        (run_dir / "old.json").write_bytes(b"{}")
+        before = _snapshot_dir(tmp_path)
+
+        (run_dir / "new.json").write_bytes(b"{}" * 50)
+
+        result = _collect_new_files(tmp_path, before)
+
+        paths = [r["path"] for r in result]
+        assert "benchmarks/run_001" in paths
+        assert not any("old.json" in p for p in paths)
+
+    def test_collect_new_files_detects_regenerated_directory_as_single_artifact(self, tmp_path):
+        import os
+
+        from scripts.run_pipeline import _collect_new_files, _snapshot_dir
+
+        # Pre-existing .mlpackage dir (package-format output) is regenerated in-place.
+        # Its mtime changes so it is captured as a single dir artifact, not expanded.
+        pkg = tmp_path / "model.mlpackage"
+        pkg.mkdir()
+        (pkg / "weights.bin").write_bytes(b"\x00" * 100)
+        before = _snapshot_dir(tmp_path)
+
+        # Simulate regeneration: overwrite the file and bump pkg mtime
+        (pkg / "weights.bin").write_bytes(b"\x00" * 200)
+        prev = before[pkg][0]
+        os.utime(pkg, ns=(prev + 1_000_000_000, prev + 1_000_000_000))
+
+        result = _collect_new_files(tmp_path, before)
+
+        assert len(result) == 1
+        assert result[0]["path"] == "model.mlpackage"
+
+    def test_collect_new_files_returns_empty_when_scan_root_missing(self, tmp_path):
+        from scripts.run_pipeline import _collect_new_files, _snapshot_dir
+
+        before = _snapshot_dir(tmp_path)
+        missing = tmp_path / "benchmarks"  # never created
+
+        result = _collect_new_files(tmp_path, before, scan_root=missing)
+        assert result == []
+
+    def test_benchmark_stage_args_include_success_criteria(self, tmp_path):
+        from scripts.run_pipeline import build_stage_args, init_pipeline_state
+
+        config = _base_config()
+        config["success_criteria"] = {"max_size_mb": 20, "max_latency_ms": 100}
+        state = init_pipeline_state(config, tmp_path)
+
+        args = build_stage_args("benchmark", config, tmp_path, state)
+        assert "--max-size-mb" in args
+        assert args[args.index("--max-size-mb") + 1] == "20"
+        assert "--max-latency-ms-p95" in args
+        assert args[args.index("--max-latency-ms-p95") + 1] == "100"
+
+    def test_benchmark_stage_args_ignores_non_dict_success_criteria(self, tmp_path, caplog):
+        import logging
+
+        from scripts.run_pipeline import build_stage_args, init_pipeline_state
+
+        config = _base_config()
+        config["success_criteria"] = ["max_size_mb", 20]  # list, not dict
+        state = init_pipeline_state(config, tmp_path)
+
+        with caplog.at_level(logging.WARNING, logger="scripts.run_pipeline"):
+            args = build_stage_args("benchmark", config, tmp_path, state)
+
+        assert "--max-size-mb" not in args
+        assert any("success_criteria" in r.message for r in caplog.records)
+
+    def test_benchmark_stage_args_does_not_inject_min_accuracy_until_implemented(
+        self, tmp_path, caplog
+    ):
+        import logging
+
+        from scripts.run_pipeline import build_stage_args, init_pipeline_state
+
+        config = _base_config()
+        config["success_criteria"] = {"min_f1": 0.80, "min_accuracy": 0.85}
+        state = init_pipeline_state(config, tmp_path)
+
+        with caplog.at_level(logging.DEBUG, logger="scripts.run_pipeline"):
+            args = build_stage_args("benchmark", config, tmp_path, state)
+
+        # Accuracy gates not yet wired — must not appear in CLI args
+        assert "--min-accuracy" not in args
+        # Known-unimplemented keys must NOT produce WARNING records
+        assert not any(
+            "min_f1" in r.message or "min_accuracy" in r.message
+            for r in caplog.records
+            if r.levelno >= logging.WARNING
+        )
+
+    def test_benchmark_stage_args_warns_on_truly_unknown_criteria(self, tmp_path, caplog):
+        import logging
+
+        from scripts.run_pipeline import build_stage_args, init_pipeline_state
+
+        config = _base_config()
+        config["success_criteria"] = {"max_size_mb": 20, "totally_unknown_key": 99}
+        state = init_pipeline_state(config, tmp_path)
+
+        with caplog.at_level(logging.WARNING, logger="scripts.run_pipeline"):
+            build_stage_args("benchmark", config, tmp_path, state)
+
+        assert any("totally_unknown_key" in r.message for r in caplog.records)
+
+    def test_benchmark_stage_args_only_debugs_known_unimplemented_criteria(self, tmp_path, caplog):
+        import logging
+
+        from scripts.run_pipeline import build_stage_args, init_pipeline_state
+
+        config = _base_config()
+        config["success_criteria"] = {
+            "max_cer": 0.05,
+            "max_accuracy_drop_pct": 5,
+            "min_accuracy": 0.9,
+            "min_f1": 0.8,
+        }
+        state = init_pipeline_state(config, tmp_path)
+
+        with caplog.at_level(logging.WARNING, logger="scripts.run_pipeline"):
+            build_stage_args("benchmark", config, tmp_path, state)
+
+        # Known-unimplemented keys must NOT produce WARNING records
+        assert not any(
+            any(
+                k in r.message
+                for k in ("max_cer", "max_accuracy_drop_pct", "min_accuracy", "min_f1")
+            )
+            for r in caplog.records
+        )
+
+    def test_init_manifest_run_id_has_millisecond_precision(self, tmp_path):
+        import json
+        import re
+
+        from scripts.run_pipeline import _init_manifest
+
+        config = {"model": "org/model", "task": "legal"}
+        config_path = tmp_path / "pipeline.yaml"
+        config_path.write_text("model: org/model\ntask: legal\n")
+        manifest_path = tmp_path / "manifest.json"
+
+        _init_manifest(manifest_path, config, config_path, ["export"])
+
+        data = json.loads(manifest_path.read_text())
+        assert re.match(r"legal_\d{8}_\d{6}_\d{3}$", data["pipeline_run_id"])
