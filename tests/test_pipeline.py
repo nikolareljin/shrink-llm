@@ -400,7 +400,7 @@ class TestManifestHelpers:
         assert "--min-accuracy" in args
         assert args[args.index("--min-accuracy") + 1] == "0.8"
 
-    def test_benchmark_stage_args_warns_on_unknown_criteria(self, tmp_path, caplog):
+    def test_benchmark_stage_args_logs_unknown_criteria(self, tmp_path, caplog):
         import logging
 
         from scripts.run_pipeline import build_stage_args, init_pipeline_state
@@ -409,7 +409,7 @@ class TestManifestHelpers:
         config["success_criteria"] = {"max_size_mb": 20, "totally_unknown_key": 99}
         state = init_pipeline_state(config, tmp_path)
 
-        with caplog.at_level(logging.WARNING, logger="scripts.run_pipeline"):
+        with caplog.at_level(logging.DEBUG, logger="scripts.run_pipeline"):
             build_stage_args("benchmark", config, tmp_path, state)
 
         assert any("totally_unknown_key" in r.message for r in caplog.records)

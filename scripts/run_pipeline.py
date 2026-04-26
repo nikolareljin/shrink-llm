@@ -453,7 +453,10 @@ def build_stage_args(
         }
         unsupported = sorted(set(criteria) - _known_criteria)
         if unsupported:
-            log.warning("Ignoring unrecognized success_criteria keys: %s", ", ".join(unsupported))
+            log.debug(
+                "success_criteria keys not translated into benchmark args by this stage: %s",
+                ", ".join(unsupported),
+            )
         if criteria.get("max_size_mb") is not None:
             args += ["--max-size-mb", str(criteria["max_size_mb"])]
         if criteria.get("max_latency_ms") is not None:
