@@ -40,6 +40,9 @@ class BenchmarkResult:
     teacher_size_mb: float | None = None
     gate_results: dict = field(default_factory=dict)
     passed: bool = True
+    # Unrounded measurements kept for gate evaluation; rounded fields are display-only
+    model_size_mb_raw: float | None = None
+    latency_ms_raw: dict = field(default_factory=dict)
 
 
 class LatencyProfiler:
@@ -61,12 +64,12 @@ class LatencyProfiler:
 
         qs = quantiles(times, n=100)
         return {
-            "mean": round(mean(times), 2),
-            "p50": round(qs[49], 2),
-            "p95": round(qs[94], 2),
-            "p99": round(qs[98], 2),
-            "min": round(min(times), 2),
-            "max": round(max(times), 2),
+            "mean": mean(times),
+            "p50": qs[49],
+            "p95": qs[94],
+            "p99": qs[98],
+            "min": min(times),
+            "max": max(times),
         }
 
 
@@ -182,12 +185,18 @@ def generate_markdown(result: BenchmarkResult, output_path: Path) -> None:
 
 def evaluate_gates(result: BenchmarkResult, args: argparse.Namespace) -> None:
     """Check benchmark results against acceptance thresholds; update result in place."""
+    # Use unrounded raw values for gating; rounded fields are for display only.
+    size_raw = (
+        result.model_size_mb_raw if result.model_size_mb_raw is not None else result.model_size_mb
+    )
+    latency_raw = result.latency_ms_raw if result.latency_ms_raw else result.latency_ms
+
     gates: dict[str, bool] = {}
     if args.max_size_mb is not None:
-        gates["max_size_mb"] = result.model_size_mb <= args.max_size_mb
+        gates["max_size_mb"] = size_raw <= args.max_size_mb
     if args.max_latency_ms_p95 is not None:
-        if result.latency_ms and "p95" in result.latency_ms:
-            gates["max_latency_ms_p95"] = result.latency_ms["p95"] <= args.max_latency_ms_p95
+        if latency_raw and "p95" in latency_raw:
+            gates["max_latency_ms_p95"] = latency_raw["p95"] <= args.max_latency_ms_p95
         else:
             log.warning(
                 "--max-latency-ms-p95 specified but p95 latency data is unavailable; gate fails"
@@ -256,16 +265,17 @@ def main() -> None:
     args = parser.parse_args()
 
     model_path = args.model
-    model_size_mb = os.path.getsize(model_path) / 1e6
+    model_size_mb_raw = os.path.getsize(model_path) / 1e6
     run_id = f"{args.task}_{Path(model_path).stem}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
-    log.info("Model: %s (%.1f MB)", model_path, model_size_mb)
+    log.info("Model: %s (%.1f MB)", model_path, model_size_mb_raw)
 
     runner = get_runner(model_path, args.runtime)
     dummy_inputs = build_dummy_inputs(args.task)
 
     profiler = LatencyProfiler(warmup_runs=args.warmup_runs, benchmark_runs=args.benchmark_runs)
-    latency = profiler.profile(runner, dummy_inputs)
+    latency_raw = profiler.profile(runner, dummy_inputs)
+    latency = {k: round(v, 2) for k, v in latency_raw.items()}
     log.info("Latency: mean=%.1f ms, p95=%.1f ms", latency["mean"], latency["p95"])
 
     mem_before = MemoryProfiler.peak_rss_mb()
@@ -274,18 +284,20 @@ def main() -> None:
 
     size_reduction = None
     if args.teacher_size_mb:
-        size_reduction = round((1 - model_size_mb / args.teacher_size_mb) * 100, 1)
+        size_reduction = round((1 - model_size_mb_raw / args.teacher_size_mb) * 100, 1)
 
     result = BenchmarkResult(
         run_id=run_id,
         timestamp=datetime.now(timezone.utc).isoformat(),
         model_name=Path(model_path).stem,
         model_path=model_path,
-        model_size_mb=round(model_size_mb, 2),
+        model_size_mb=round(model_size_mb_raw, 2),
+        model_size_mb_raw=model_size_mb_raw,
         task=args.task,
         runtime=args.runtime,
         accuracy={},  # populate from eval_dataset if provided
         latency_ms=latency,
+        latency_ms_raw=latency_raw,
         memory_mb={
             "rss_after_load": round(mem_after, 1),
             "rss_delta": round(mem_after - mem_before, 1),
