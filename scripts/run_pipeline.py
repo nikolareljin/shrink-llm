@@ -450,8 +450,6 @@ def build_stage_args(
             "max_latency_ms",
             "min_accuracy",
             "min_f1",
-            "max_cer",
-            "max_accuracy_drop_pct",
         }
         unsupported = sorted(set(criteria) - _known_criteria)
         if unsupported:
@@ -476,25 +474,55 @@ def build_stage_args(
 
 
 def _sha256_file(path: Path) -> str:
-    return f"sha256:{hashlib.sha256(path.read_bytes()).hexdigest()}"
+    h = hashlib.sha256()
+    try:
+        with path.open("rb") as f:
+            for chunk in iter(lambda: f.read(8192), b""):
+                h.update(chunk)
+    except OSError as exc:
+        log.warning("Could not hash %s: %s — config_hash will be empty", path, exc)
+        return ""
+    return f"sha256:{h.hexdigest()}"
 
 
 def _snapshot_dir(d: Path) -> dict[Path, tuple[int, int]]:
-    """Return {path: (mtime_ns, size)} for all files under d.
+    """Return {path: (mtime_ns, size)} for files directly under d or one subdirectory deep.
 
+    Pipeline stages write artifacts at depth 0 (output_dir/*.onnx) or depth 1
+    (output_dir/benchmarks/, output_dir/pruned/). Limiting to two levels keeps
+    overhead O(artifacts) rather than O(entire tree).
     Using nanosecond mtime and size together catches overwrites on filesystems
     with coarse timestamp resolution (e.g. FAT32, some network mounts).
     """
     if not d.exists():
         return {}
-    return {p: (s.st_mtime_ns, s.st_size) for p in d.rglob("*") if p.is_file() for s in [p.stat()]}
+    result: dict[Path, tuple[int, int]] = {}
+    for p in d.iterdir():
+        if p.is_file():
+            s = p.stat()
+            result[p] = (s.st_mtime_ns, s.st_size)
+        elif p.is_dir():
+            for child in p.iterdir():
+                if child.is_file():
+                    s = child.stat()
+                    result[child] = (s.st_mtime_ns, s.st_size)
+    return result
 
 
 def _collect_new_files(output_dir: Path, before: dict[Path, tuple[int, int]]) -> list[dict]:
-    """Return files created or overwritten since the before snapshot, excluding manifest.json."""
+    """Return files created or overwritten since the before snapshot, excluding manifest.json.
+
+    Scans the same two-level depth as _snapshot_dir so comparisons are consistent.
+    """
+    candidates: list[Path] = []
+    for p in output_dir.iterdir():
+        if p.is_file():
+            candidates.append(p)
+        elif p.is_dir():
+            candidates.extend(child for child in p.iterdir() if child.is_file())
     result = []
-    for p in sorted(output_dir.rglob("*")):
-        if not p.is_file() or p.name == "manifest.json":
+    for p in sorted(candidates):
+        if p.name == "manifest.json":
             continue
         stat = p.stat()
         if p not in before or (stat.st_mtime_ns, stat.st_size) != before[p]:
