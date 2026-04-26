@@ -510,8 +510,10 @@ def _snapshot_dir(d: Path) -> dict[Path, tuple[int, int]]:
             s = p.stat()
             result[p] = (s.st_mtime_ns, s.st_size)
         elif p.is_dir():
+            # Lightweight sentinel: mtime_ns + nlink; no recursive scan.
+            # Recursive sizing is deferred to _collect_new_files for new dirs only.
             s = p.stat()
-            result[p] = (s.st_mtime_ns, _dir_size(p))
+            result[p] = (s.st_mtime_ns, s.st_nlink)
             for child in p.iterdir():
                 if child.is_file():
                     cs = child.stat()
