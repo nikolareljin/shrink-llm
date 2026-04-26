@@ -542,7 +542,10 @@ class TestManifestHelpers:
 
         # Known-unimplemented keys must NOT produce WARNING records
         assert not any(
-            any(k in r.message for k in ("max_cer", "max_accuracy_drop_pct", "min_accuracy", "min_f1"))
+            any(
+                k in r.message
+                for k in ("max_cer", "max_accuracy_drop_pct", "min_accuracy", "min_f1")
+            )
             for r in caplog.records
         )
 
