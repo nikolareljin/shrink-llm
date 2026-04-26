@@ -445,12 +445,31 @@ def build_stage_args(
         if b.get("dataset"):
             args += ["--dataset", b["dataset"]]
         criteria = config.get("success_criteria") or {}
+        _known_criteria = {
+            "max_size_mb",
+            "max_latency_ms",
+            "min_accuracy",
+            "min_f1",
+            "max_cer",
+            "max_accuracy_drop_pct",
+        }
+        unsupported = sorted(set(criteria) - _known_criteria)
+        if unsupported:
+            log.warning("Ignoring unrecognized success_criteria keys: %s", ", ".join(unsupported))
         if criteria.get("max_size_mb") is not None:
             args += ["--max-size-mb", str(criteria["max_size_mb"])]
         if criteria.get("max_latency_ms") is not None:
             args += ["--max-latency-ms-p95", str(criteria["max_latency_ms"])]
-        if criteria.get("min_accuracy") is not None:
-            args += ["--min-accuracy", str(criteria["min_accuracy"])]
+        min_accuracy = criteria.get("min_accuracy")
+        min_f1 = criteria.get("min_f1")
+        if min_accuracy is not None and min_f1 is not None:
+            log.warning(
+                "success_criteria defines both min_accuracy and min_f1; using min_accuracy, ignoring min_f1"
+            )
+        if min_accuracy is None and min_f1 is not None:
+            min_accuracy = min_f1
+        if min_accuracy is not None:
+            args += ["--min-accuracy", str(min_accuracy)]
         return args
 
     return []
@@ -490,8 +509,10 @@ def _init_manifest(manifest_path: Path, config: dict, config_path: Path, stages:
     If a valid manifest already exists (e.g. from a prior run), unknown top-level
     keys are preserved; only the per-run fields are reset.
     """
+    _now = datetime.now(timezone.utc)
     run_id = (
-        f"{config.get('task', 'unknown')}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
+        f"{config.get('task', 'unknown')}_"
+        f"{_now.strftime('%Y%m%d_%H%M%S')}_{_now.microsecond // 1000:03d}"
     )
     manifest: dict = {}
     if manifest_path.exists():

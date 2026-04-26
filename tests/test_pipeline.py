@@ -388,3 +388,44 @@ class TestManifestHelpers:
         assert args[args.index("--max-size-mb") + 1] == "20"
         assert "--max-latency-ms-p95" in args
         assert args[args.index("--max-latency-ms-p95") + 1] == "100"
+
+    def test_benchmark_stage_args_maps_min_f1_to_min_accuracy(self, tmp_path):
+        from scripts.run_pipeline import build_stage_args, init_pipeline_state
+
+        config = _base_config()
+        config["success_criteria"] = {"min_f1": 0.80}
+        state = init_pipeline_state(config, tmp_path)
+
+        args = build_stage_args("benchmark", config, tmp_path, state)
+        assert "--min-accuracy" in args
+        assert args[args.index("--min-accuracy") + 1] == "0.8"
+
+    def test_benchmark_stage_args_warns_on_unknown_criteria(self, tmp_path, caplog):
+        import logging
+
+        from scripts.run_pipeline import build_stage_args, init_pipeline_state
+
+        config = _base_config()
+        config["success_criteria"] = {"max_size_mb": 20, "totally_unknown_key": 99}
+        state = init_pipeline_state(config, tmp_path)
+
+        with caplog.at_level(logging.WARNING, logger="scripts.run_pipeline"):
+            build_stage_args("benchmark", config, tmp_path, state)
+
+        assert any("totally_unknown_key" in r.message for r in caplog.records)
+
+    def test_init_manifest_run_id_has_millisecond_precision(self, tmp_path):
+        import json
+        import re
+
+        from scripts.run_pipeline import _init_manifest
+
+        config = {"model": "org/model", "task": "legal"}
+        config_path = tmp_path / "pipeline.yaml"
+        config_path.write_text("model: org/model\ntask: legal\n")
+        manifest_path = tmp_path / "manifest.json"
+
+        _init_manifest(manifest_path, config, config_path, ["export"])
+
+        data = json.loads(manifest_path.read_text())
+        assert re.match(r"legal_\d{8}_\d{6}_\d{3}$", data["pipeline_run_id"])

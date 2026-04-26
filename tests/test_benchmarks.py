@@ -218,3 +218,20 @@ class TestEvaluateGates:
         evaluate_gates(result, _make_args(min_accuracy=0.9))
         assert result.gate_results["min_accuracy"] is True
         assert result.passed is True
+
+    def test_min_accuracy_uses_zero_accuracy_not_fallback(self):
+        from scripts.benchmark import evaluate_gates
+
+        # accuracy=0.0 is a valid (failing) result; must NOT fall through to f1
+        result = _make_result(accuracy={"accuracy": 0.0, "f1": 0.99})
+        evaluate_gates(result, _make_args(min_accuracy=0.5))
+        assert result.gate_results["min_accuracy"] is False
+        assert result.passed is False
+
+    def test_min_accuracy_falls_back_to_f1_when_accuracy_key_absent(self):
+        from scripts.benchmark import evaluate_gates
+
+        result = _make_result(accuracy={"f1": 0.95})
+        evaluate_gates(result, _make_args(min_accuracy=0.9))
+        assert result.gate_results["min_accuracy"] is True
+        assert result.passed is True
