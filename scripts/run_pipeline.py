@@ -494,13 +494,16 @@ def _dir_size(d: Path) -> int:
 
 
 def _snapshot_dir(d: Path) -> dict[Path, tuple[int, int]]:
-    """Return {path: (mtime_ns, size)} for files and directories directly under d.
+    """Return a shallow snapshot used to detect new or overwritten outputs.
 
-    Directories at depth 0 are recorded with (mtime_ns, total_recursive_size) so
-    newly-created package-format artifacts (e.g. .mlpackage, GPTQ dirs) are detected.
-    Individual files at depth 0 and depth 1 are also tracked for overwrite detection.
-    Using nanosecond mtime and size together catches overwrites on filesystems with
-    coarse timestamp resolution (e.g. FAT32, some network mounts).
+    Files directly under d are recorded as (mtime_ns, size).
+    Directories directly under d are recorded as (mtime_ns, st_nlink) — a
+    lightweight sentinel that avoids a recursive scan at snapshot time.
+    Child files one level deep inside those directories are also recorded as
+    (mtime_ns, size) for overwrite detection in pre-existing subdirectories.
+
+    Recursive directory sizing is deferred to _collect_new_files and only
+    runs for directories that are absent from the before-snapshot (i.e. new).
     """
     if not d.exists():
         return {}
