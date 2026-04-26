@@ -211,12 +211,17 @@ def evaluate_gates(result: BenchmarkResult, args: argparse.Namespace) -> None:
             else:
                 acc = 0.0
             gates["min_accuracy"] = float(acc) >= args.min_accuracy
+        elif getattr(args, "dataset", None) is not None:
+            log.warning(
+                "--min-accuracy specified and --dataset provided but no accuracy data was computed; "
+                "gate fails"
+            )
+            gates["min_accuracy"] = False
         else:
             log.warning(
-                "--min-accuracy specified but accuracy evaluation is not yet implemented; "
-                "gate is skipped (treated as not evaluated)"
+                "--min-accuracy specified but no --dataset provided; "
+                "accuracy evaluation is not yet implemented; gate skipped"
             )
-            # Gate intentionally omitted — not evaluated is not the same as failed
     result.gate_results = gates
     result.passed = all(gates.values()) if gates else True
 
@@ -265,7 +270,13 @@ def main() -> None:
     args = parser.parse_args()
 
     model_path = args.model
-    model_size_mb_raw = os.path.getsize(model_path) / 1e6
+    model_path_obj = Path(model_path)
+    if model_path_obj.is_dir():
+        model_size_mb_raw = (
+            sum(f.stat().st_size for f in model_path_obj.rglob("*") if f.is_file()) / 1e6
+        )
+    else:
+        model_size_mb_raw = os.path.getsize(model_path) / 1e6
     run_id = f"{args.task}_{Path(model_path).stem}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
     log.info("Model: %s (%.1f MB)", model_path, model_size_mb_raw)
