@@ -460,40 +460,65 @@ def _sha256_file(path: Path) -> str:
     return f"sha256:{hashlib.sha256(path.read_bytes()).hexdigest()}"
 
 
-def _snapshot_dir(d: Path) -> dict[Path, float]:
-    """Return {path: mtime} for all files under d, used to detect new and overwritten files."""
+def _snapshot_dir(d: Path) -> dict[Path, tuple[int, int]]:
+    """Return {path: (mtime_ns, size)} for all files under d.
+
+    Using nanosecond mtime and size together catches overwrites on filesystems
+    with coarse timestamp resolution (e.g. FAT32, some network mounts).
+    """
     if not d.exists():
         return {}
-    return {p: p.stat().st_mtime for p in d.rglob("*") if p.is_file()}
+    return {p: (s.st_mtime_ns, s.st_size) for p in d.rglob("*") if p.is_file() for s in [p.stat()]}
 
 
-def _collect_new_files(output_dir: Path, before: dict[Path, float]) -> list[dict]:
+def _collect_new_files(output_dir: Path, before: dict[Path, tuple[int, int]]) -> list[dict]:
     """Return files created or overwritten since the before snapshot, excluding manifest.json."""
     result = []
     for p in sorted(output_dir.rglob("*")):
         if not p.is_file() or p.name == "manifest.json":
             continue
-        if p not in before or p.stat().st_mtime > before[p]:
-            size_mb = round(p.stat().st_size / 1_048_576, 3)
+        stat = p.stat()
+        if p not in before or (stat.st_mtime_ns, stat.st_size) != before[p]:
+            size_mb = round(stat.st_size / 1_000_000, 3)
             result.append({"path": str(p.relative_to(output_dir)), "size_mb": size_mb})
     return result
 
 
 def _init_manifest(manifest_path: Path, config: dict, config_path: Path, stages: list[str]) -> None:
-    """Write pipeline-level metadata to the manifest file before stages run."""
+    """Write pipeline-level metadata to the manifest file before stages run.
+
+    If a valid manifest already exists (e.g. from a prior run), unknown top-level
+    keys are preserved; only the per-run fields are reset.
+    """
     run_id = (
         f"{config.get('task', 'unknown')}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
     )
-    manifest: dict = {
-        "version": "1",
-        "pipeline_run_id": run_id,
-        "model_id": config.get("model", ""),
-        "task": config.get("task", ""),
-        "config_path": str(config_path),
-        "config_hash": _sha256_file(config_path) if config_path.exists() else "",
-        "total_stages": len(stages),
-        "stages": [],
-    }
+    manifest: dict = {}
+    if manifest_path.exists():
+        try:
+            loaded = json.loads(manifest_path.read_text())
+            if isinstance(loaded, dict):
+                manifest = loaded
+            else:
+                log.warning(
+                    "Manifest %s contained %s JSON, expected object — replacing",
+                    manifest_path,
+                    type(loaded).__name__,
+                )
+        except (OSError, json.JSONDecodeError) as exc:
+            log.warning("Could not read manifest %s: %s — replacing", manifest_path, exc)
+    manifest.update(
+        {
+            "version": "1",
+            "pipeline_run_id": run_id,
+            "model_id": config.get("model", ""),
+            "task": config.get("task", ""),
+            "config_path": str(config_path),
+            "config_hash": _sha256_file(config_path) if config_path.exists() else "",
+            "total_stages": len(stages),
+            "stages": [],
+        }
+    )
     manifest_path.write_text(json.dumps(manifest, indent=2))
 
 
@@ -504,7 +529,7 @@ def _update_manifest(
     success: bool,
     exit_code: int = 0,
     artifacts: list[dict] | None = None,
-    error: str | None = None,
+    error: dict | None = None,
 ) -> None:
     """Append a stage record to the pipeline manifest JSON."""
     record: dict = {
@@ -605,12 +630,19 @@ def main() -> None:
         if not stage_args and stage not in ("export",):
             log.warning("Stage '%s' produced no args, skipping", stage)
             continue
-        before = _snapshot_dir(args.output_dir)
+        before = _snapshot_dir(args.output_dir) if not args.dry_run else {}
         exit_code, success = run_stage(script_map[stage], stage_args, dry_run=args.dry_run)
         results[stage] = "OK" if success else "FAILED"
         if not args.dry_run:
             artifacts = _collect_new_files(args.output_dir, before)
-            error_msg = None if success else f"Stage '{stage}' exited with code {exit_code}"
+            error_obj = (
+                None
+                if success
+                else {
+                    "message": f"Stage '{stage}' exited with code {exit_code}",
+                    "exit_code": exit_code,
+                }
+            )
             _update_manifest(
                 manifest_path,
                 stage,
@@ -618,7 +650,7 @@ def main() -> None:
                 success,
                 exit_code=exit_code,
                 artifacts=artifacts,
-                error=error_msg,
+                error=error_obj,
             )
         if success:
             update_pipeline_state(stage, state, config, args.output_dir, dry_run=args.dry_run)

@@ -172,6 +172,14 @@ class TestEvaluateGates:
         assert result.gate_results["max_latency_ms_p95"] is False
         assert result.passed is False
 
+    def test_latency_gate_fails_when_p95_missing(self):
+        from scripts.benchmark import evaluate_gates
+
+        result = _make_result(latency_ms={"mean": 50.0})  # p95 absent
+        evaluate_gates(result, _make_args(max_latency_ms_p95=100.0))
+        assert result.gate_results["max_latency_ms_p95"] is False
+        assert result.passed is False
+
     def test_multiple_gates_all_must_pass(self):
         from scripts.benchmark import evaluate_gates
 
