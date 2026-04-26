@@ -454,6 +454,21 @@ class TestManifestHelpers:
         assert "--max-latency-ms-p95" in args
         assert args[args.index("--max-latency-ms-p95") + 1] == "100"
 
+    def test_benchmark_stage_args_ignores_non_dict_success_criteria(self, tmp_path, caplog):
+        import logging
+
+        from scripts.run_pipeline import build_stage_args, init_pipeline_state
+
+        config = _base_config()
+        config["success_criteria"] = ["max_size_mb", 20]  # list, not dict
+        state = init_pipeline_state(config, tmp_path)
+
+        with caplog.at_level(logging.WARNING, logger="scripts.run_pipeline"):
+            args = build_stage_args("benchmark", config, tmp_path, state)
+
+        assert "--max-size-mb" not in args
+        assert any("success_criteria" in r.message for r in caplog.records)
+
     def test_benchmark_stage_args_maps_min_f1_to_min_accuracy(self, tmp_path):
         from scripts.run_pipeline import build_stage_args, init_pipeline_state
 
