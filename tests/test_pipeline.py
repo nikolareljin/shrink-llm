@@ -441,6 +441,23 @@ class TestManifestHelpers:
         assert len(result) == 1
         assert result[0]["path"] == "benchmarks/result.json"
 
+    def test_collect_new_files_detects_deep_file_in_preexisting_nested_dir(self, tmp_path):
+        from scripts.run_pipeline import _collect_new_files, _snapshot_dir
+
+        # Pre-existing benchmarks/run_001/ exists; stage adds a new file inside it (depth 2)
+        run_dir = tmp_path / "benchmarks" / "run_001"
+        run_dir.mkdir(parents=True)
+        (run_dir / "old.json").write_bytes(b"{}")
+        before = _snapshot_dir(tmp_path)
+
+        (run_dir / "new.json").write_bytes(b"{}" * 50)
+
+        result = _collect_new_files(tmp_path, before)
+
+        paths = [r["path"] for r in result]
+        assert "benchmarks/run_001/new.json" in paths
+        assert not any("old.json" in p for p in paths)
+
     def test_benchmark_stage_args_include_success_criteria(self, tmp_path):
         from scripts.run_pipeline import build_stage_args, init_pipeline_state
 

@@ -503,24 +503,16 @@ def _dir_size(d: Path) -> int:
 
 
 def _snapshot_dir(d: Path) -> dict[Path, tuple[int, int]]:
-    """Return a shallow snapshot used to detect new or overwritten outputs.
+    """Return a recursive snapshot used to detect new or overwritten outputs.
 
-    Files at depth 0 and 1 are recorded as (mtime_ns, size).
-    Directories at depth 0 and 1 are recorded as (mtime_ns, st_nlink) — a
-    lightweight sentinel that avoids a recursive scan at snapshot time.
-
-    Recursive directory sizing is deferred to _collect_new_files and only
-    runs for directories that are absent from the before-snapshot (i.e. new).
+    Files at all depths are recorded as (mtime_ns, size).
+    Directories at all depths are recorded as (mtime_ns, st_nlink) — a
+    lightweight sentinel to detect new or structurally modified directories.
     """
     if not d.exists():
         return {}
     result: dict[Path, tuple[int, int]] = {}
-    try:
-        top_entries = list(d.iterdir())
-    except OSError as exc:
-        log.warning("Could not scan output dir %s: %s — snapshot will be empty", d, exc)
-        return result
-    for p in top_entries:
+    for p in d.rglob("*"):
         try:
             s = p.stat()
         except OSError as exc:
@@ -530,63 +522,41 @@ def _snapshot_dir(d: Path) -> dict[Path, tuple[int, int]]:
             result[p] = (s.st_mtime_ns, s.st_size)
         elif _stat.S_ISDIR(s.st_mode):
             result[p] = (s.st_mtime_ns, s.st_nlink)
-            try:
-                child_entries = list(p.iterdir())
-            except OSError as exc:
-                log.warning("Could not scan subdir %s: %s — skipping", p, exc)
-                continue
-            for child in child_entries:
-                try:
-                    cs = child.stat()
-                except OSError as exc:
-                    log.warning("Skipping unreadable path %s in snapshot: %s", child, exc)
-                    continue
-                if _stat.S_ISREG(cs.st_mode):
-                    result[child] = (cs.st_mtime_ns, cs.st_size)
-                elif _stat.S_ISDIR(cs.st_mode):
-                    result[child] = (cs.st_mtime_ns, cs.st_nlink)
     return result
 
 
 def _collect_new_files(output_dir: Path, before: dict[Path, tuple[int, int]]) -> list[dict]:
     """Return files and directories created or overwritten since the before snapshot.
 
-    New directories at depth 0 are recorded as single artifacts (total size = sum of
-    contained files), covering package-format outputs like .mlpackage and GPTQ dirs.
-    New directories at depth 1 (inside pre-existing subdirs) are also recorded.
-    Files inside newly-captured directories are not listed separately.
+    Newly created directories at any depth are recorded as single artifacts
+    (total size = sum of contained files), covering package-format outputs like
+    .mlpackage and GPTQ dirs. Files inside newly-captured directories are not
+    listed separately. Files under pre-existing directories are checked
+    recursively so deeper new/changed outputs are not missed.
     """
-    result = []
-    new_dirs: set[Path] = set()
+    result: list[dict] = []
 
-    # Pass 1: new depth-0 directories (e.g. .mlpackage, gptq output dir)
-    for p in sorted(output_dir.iterdir()):
-        if not p.is_dir() or p in before:
-            continue
-        size_mb = round(_dir_size(p) / 1_000_000, 3)
-        result.append({"path": str(p.relative_to(output_dir)), "size_mb": size_mb})
-        new_dirs.add(p)
+    def _visit(path: Path) -> None:
+        rel_path = path.relative_to(output_dir)
 
-    # Pass 2: new/changed files and new depth-1 subdirs inside pre-existing depth-0 dirs
-    candidates: list[Path] = []
-    for p in output_dir.iterdir():
-        if p.is_file():
-            candidates.append(p)
-        elif p.is_dir() and p not in new_dirs:
-            for child in p.iterdir():
-                if child.is_file():
-                    candidates.append(child)
-                elif child.is_dir() and child not in before:
-                    size_mb = round(_dir_size(child) / 1_000_000, 3)
-                    result.append({"path": str(child.relative_to(output_dir)), "size_mb": size_mb})
-    for p in sorted(candidates):
-        rel_path = p.relative_to(output_dir)
+        if path.is_dir():
+            if path != output_dir and path not in before:
+                size_mb = round(_dir_size(path) / 1_000_000, 3)
+                result.append({"path": str(rel_path), "size_mb": size_mb})
+                return
+            for child in sorted(path.iterdir()):
+                _visit(child)
+            return
+
         if rel_path == Path("manifest.json"):
-            continue
-        stat = p.stat()
-        if p not in before or (stat.st_mtime_ns, stat.st_size) != before[p]:
+            return
+
+        stat = path.stat()
+        if path not in before or (stat.st_mtime_ns, stat.st_size) != before[path]:
             size_mb = round(stat.st_size / 1_000_000, 3)
             result.append({"path": str(rel_path), "size_mb": size_mb})
+
+    _visit(output_dir)
     return result
 
 
