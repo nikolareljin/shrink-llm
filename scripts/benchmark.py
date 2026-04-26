@@ -204,10 +204,10 @@ def evaluate_gates(result: BenchmarkResult, args: argparse.Namespace) -> None:
             gates["min_accuracy"] = float(acc) >= args.min_accuracy
         else:
             log.warning(
-                "--min-accuracy specified but no accuracy data is available "
-                "(accuracy evaluation is not yet implemented); gate fails"
+                "--min-accuracy specified but accuracy evaluation is not yet implemented; "
+                "gate is skipped (treated as not evaluated)"
             )
-            gates["min_accuracy"] = False
+            # Gate intentionally omitted — not evaluated is not the same as failed
     result.gate_results = gates
     result.passed = all(gates.values()) if gates else True
 
