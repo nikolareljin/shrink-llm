@@ -195,7 +195,12 @@ def evaluate_gates(result: BenchmarkResult, args: argparse.Namespace) -> None:
             gates["max_latency_ms_p95"] = False
     if args.min_accuracy is not None:
         if result.accuracy:
-            acc = result.accuracy.get("accuracy") or result.accuracy.get("f1") or 0.0
+            if "accuracy" in result.accuracy:
+                acc = result.accuracy["accuracy"]
+            elif "f1" in result.accuracy:
+                acc = result.accuracy["f1"]
+            else:
+                acc = 0.0
             gates["min_accuracy"] = float(acc) >= args.min_accuracy
         else:
             log.warning(
