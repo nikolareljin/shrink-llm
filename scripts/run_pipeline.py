@@ -496,11 +496,9 @@ def _dir_size(d: Path) -> int:
 def _snapshot_dir(d: Path) -> dict[Path, tuple[int, int]]:
     """Return a shallow snapshot used to detect new or overwritten outputs.
 
-    Files directly under d are recorded as (mtime_ns, size).
-    Directories directly under d are recorded as (mtime_ns, st_nlink) — a
+    Files at depth 0 and 1 are recorded as (mtime_ns, size).
+    Directories at depth 0 and 1 are recorded as (mtime_ns, st_nlink) — a
     lightweight sentinel that avoids a recursive scan at snapshot time.
-    Child files one level deep inside those directories are also recorded as
-    (mtime_ns, size) for overwrite detection in pre-existing subdirectories.
 
     Recursive directory sizing is deferred to _collect_new_files and only
     runs for directories that are absent from the before-snapshot (i.e. new).
@@ -513,14 +511,15 @@ def _snapshot_dir(d: Path) -> dict[Path, tuple[int, int]]:
             s = p.stat()
             result[p] = (s.st_mtime_ns, s.st_size)
         elif p.is_dir():
-            # Lightweight sentinel: mtime_ns + nlink; no recursive scan.
-            # Recursive sizing is deferred to _collect_new_files for new dirs only.
             s = p.stat()
             result[p] = (s.st_mtime_ns, s.st_nlink)
             for child in p.iterdir():
                 if child.is_file():
                     cs = child.stat()
                     result[child] = (cs.st_mtime_ns, cs.st_size)
+                elif child.is_dir():
+                    cs = child.stat()
+                    result[child] = (cs.st_mtime_ns, cs.st_nlink)
     return result
 
 
@@ -529,6 +528,7 @@ def _collect_new_files(output_dir: Path, before: dict[Path, tuple[int, int]]) ->
 
     New directories at depth 0 are recorded as single artifacts (total size = sum of
     contained files), covering package-format outputs like .mlpackage and GPTQ dirs.
+    New directories at depth 1 (inside pre-existing subdirs) are also recorded.
     Files inside newly-captured directories are not listed separately.
     """
     result = []
@@ -542,13 +542,18 @@ def _collect_new_files(output_dir: Path, before: dict[Path, tuple[int, int]]) ->
         result.append({"path": str(p.relative_to(output_dir)), "size_mb": size_mb})
         new_dirs.add(p)
 
-    # Pass 2: new/changed files at depth 0 and inside pre-existing subdirs
+    # Pass 2: new/changed files and new depth-1 subdirs inside pre-existing depth-0 dirs
     candidates: list[Path] = []
     for p in output_dir.iterdir():
         if p.is_file():
             candidates.append(p)
         elif p.is_dir() and p not in new_dirs:
-            candidates.extend(child for child in p.iterdir() if child.is_file())
+            for child in p.iterdir():
+                if child.is_file():
+                    candidates.append(child)
+                elif child.is_dir() and child not in before:
+                    size_mb = round(_dir_size(child) / 1_000_000, 3)
+                    result.append({"path": str(child.relative_to(output_dir)), "size_mb": size_mb})
     for p in sorted(candidates):
         rel_path = p.relative_to(output_dir)
         if rel_path == Path("manifest.json"):

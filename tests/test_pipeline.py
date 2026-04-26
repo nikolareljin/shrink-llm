@@ -363,6 +363,24 @@ class TestManifestHelpers:
         # the nested manifest.json must NOT appear as a separate entry
         assert not any(r["path"] == "benchmarks/manifest.json" for r in result)
 
+    def test_collect_new_files_detects_new_subdir_inside_preexisting_dir(self, tmp_path):
+        from scripts.run_pipeline import _collect_new_files, _snapshot_dir
+
+        # Pre-existing benchmarks/ dir; stage creates benchmarks/run_001/ inside it
+        existing_dir = tmp_path / "benchmarks"
+        existing_dir.mkdir()
+        before = _snapshot_dir(tmp_path)
+
+        new_subdir = existing_dir / "run_001"
+        new_subdir.mkdir()
+        (new_subdir / "result.json").write_bytes(b"{}" * 500)
+
+        result = _collect_new_files(tmp_path, before)
+
+        paths = [r["path"] for r in result]
+        assert "benchmarks/run_001" in paths
+        assert not any("result.json" in p for p in paths)
+
     def test_collect_new_files_reports_size(self, tmp_path):
         from scripts.run_pipeline import _collect_new_files, _snapshot_dir
 
