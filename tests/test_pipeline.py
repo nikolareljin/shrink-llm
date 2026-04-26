@@ -270,15 +270,15 @@ class TestUpdateManifest:
         from scripts.run_pipeline import _update_manifest
 
         path = tmp_path / "manifest.json"
-        _update_manifest(
-            path, "export", [], False, exit_code=1, error="Stage 'export' exited with code 1"
-        )
+        error = {"message": "Stage 'export' exited with code 1", "exit_code": 1}
+        _update_manifest(path, "export", [], False, exit_code=1, error=error)
 
         data = json.loads(path.read_text())
         rec = data["stages"][0]
         assert rec["status"] == "failed"
         assert rec["exit_code"] == 1
-        assert "exited with code 1" in rec["error"]
+        assert "exited with code 1" in rec["error"]["message"]
+        assert rec["error"]["exit_code"] == 1
 
     def test_records_artifacts_for_successful_stage(self, tmp_path):
         import json
@@ -316,6 +316,24 @@ class TestManifestHelpers:
         assert "pipeline_run_id" in data
         assert data["stages"] == []
 
+    def test_init_manifest_preserves_unknown_keys(self, tmp_path):
+        import json
+
+        from scripts.run_pipeline import _init_manifest
+
+        config = {"model": "org/model", "task": "ocr"}
+        config_path = tmp_path / "pipeline.yaml"
+        config_path.write_text("model: org/model\ntask: ocr\n")
+        manifest_path = tmp_path / "manifest.json"
+        manifest_path.write_text(json.dumps({"custom_key": "preserved", "stages": []}))
+
+        _init_manifest(manifest_path, config, config_path, ["export"])
+
+        data = json.loads(manifest_path.read_text())
+        assert data["custom_key"] == "preserved"
+        assert data["version"] == "1"
+        assert data["stages"] == []
+
     def test_collect_new_files_excludes_manifest(self, tmp_path):
         from scripts.run_pipeline import _collect_new_files, _snapshot_dir
 
@@ -333,23 +351,25 @@ class TestManifestHelpers:
         from scripts.run_pipeline import _collect_new_files, _snapshot_dir
 
         before = _snapshot_dir(tmp_path)
-        (tmp_path / "artifact.onnx").write_bytes(b"\x00" * 2_097_152)  # 2 MiB
+        (tmp_path / "artifact.onnx").write_bytes(b"\x00" * 2_000_000)  # exactly 2 MB (1e6)
 
         result = _collect_new_files(tmp_path, before)
 
         assert len(result) == 1
-        assert result[0]["size_mb"] == pytest.approx(2.0, abs=0.01)
+        assert result[0]["size_mb"] == pytest.approx(2.0, abs=0.001)
 
     def test_collect_new_files_detects_overwritten_file(self, tmp_path):
-        import time
+        import os
 
         from scripts.run_pipeline import _collect_new_files, _snapshot_dir
 
         artifact = tmp_path / "model.onnx"
         artifact.write_bytes(b"\x00" * 512)
         before = _snapshot_dir(tmp_path)
-        time.sleep(0.01)  # ensure mtime advances
-        artifact.write_bytes(b"\x00" * 1024)  # overwrite same path
+        artifact.write_bytes(b"\x00" * 1024)  # overwrite same path with different size
+        # Force mtime_ns forward to guarantee detection on coarse-resolution filesystems
+        prev_mtime_ns = before[artifact][0]
+        os.utime(artifact, ns=(prev_mtime_ns + 1_000_000_000, prev_mtime_ns + 1_000_000_000))
 
         result = _collect_new_files(tmp_path, before)
 
