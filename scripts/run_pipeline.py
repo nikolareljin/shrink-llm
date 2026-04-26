@@ -488,14 +488,19 @@ def _sha256_file(path: Path) -> str:
     return f"sha256:{h.hexdigest()}"
 
 
-def _snapshot_dir(d: Path) -> dict[Path, tuple[int, int]]:
-    """Return {path: (mtime_ns, size)} for files directly under d or one subdirectory deep.
+def _dir_size(d: Path) -> int:
+    """Total byte size of all files recursively under d."""
+    return sum(f.stat().st_size for f in d.rglob("*") if f.is_file())
 
-    Pipeline stages write artifacts at depth 0 (output_dir/*.onnx) or depth 1
-    (output_dir/benchmarks/, output_dir/pruned/). Limiting to two levels keeps
-    overhead O(artifacts) rather than O(entire tree).
-    Using nanosecond mtime and size together catches overwrites on filesystems
-    with coarse timestamp resolution (e.g. FAT32, some network mounts).
+
+def _snapshot_dir(d: Path) -> dict[Path, tuple[int, int]]:
+    """Return {path: (mtime_ns, size)} for files and directories directly under d.
+
+    Directories at depth 0 are recorded with (mtime_ns, total_recursive_size) so
+    newly-created package-format artifacts (e.g. .mlpackage, GPTQ dirs) are detected.
+    Individual files at depth 0 and depth 1 are also tracked for overwrite detection.
+    Using nanosecond mtime and size together catches overwrites on filesystems with
+    coarse timestamp resolution (e.g. FAT32, some network mounts).
     """
     if not d.exists():
         return {}
@@ -505,25 +510,40 @@ def _snapshot_dir(d: Path) -> dict[Path, tuple[int, int]]:
             s = p.stat()
             result[p] = (s.st_mtime_ns, s.st_size)
         elif p.is_dir():
+            s = p.stat()
+            result[p] = (s.st_mtime_ns, _dir_size(p))
             for child in p.iterdir():
                 if child.is_file():
-                    s = child.stat()
-                    result[child] = (s.st_mtime_ns, s.st_size)
+                    cs = child.stat()
+                    result[child] = (cs.st_mtime_ns, cs.st_size)
     return result
 
 
 def _collect_new_files(output_dir: Path, before: dict[Path, tuple[int, int]]) -> list[dict]:
-    """Return files created or overwritten since the before snapshot, excluding manifest.json.
+    """Return files and directories created or overwritten since the before snapshot.
 
-    Scans the same two-level depth as _snapshot_dir so comparisons are consistent.
+    New directories at depth 0 are recorded as single artifacts (total size = sum of
+    contained files), covering package-format outputs like .mlpackage and GPTQ dirs.
+    Files inside newly-captured directories are not listed separately.
     """
+    result = []
+    new_dirs: set[Path] = set()
+
+    # Pass 1: new depth-0 directories (e.g. .mlpackage, gptq output dir)
+    for p in sorted(output_dir.iterdir()):
+        if not p.is_dir() or p in before:
+            continue
+        size_mb = round(_dir_size(p) / 1_000_000, 3)
+        result.append({"path": str(p.relative_to(output_dir)), "size_mb": size_mb})
+        new_dirs.add(p)
+
+    # Pass 2: new/changed files at depth 0 and inside pre-existing subdirs
     candidates: list[Path] = []
     for p in output_dir.iterdir():
         if p.is_file():
             candidates.append(p)
-        elif p.is_dir():
+        elif p.is_dir() and p not in new_dirs:
             candidates.extend(child for child in p.iterdir() if child.is_file())
-    result = []
     for p in sorted(candidates):
         if p.name == "manifest.json":
             continue
