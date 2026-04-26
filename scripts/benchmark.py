@@ -10,6 +10,7 @@ import argparse
 import json
 import logging
 import os
+import sys
 import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -37,6 +38,8 @@ class BenchmarkResult:
     size_reduction_pct: float | None = None
     teacher_name: str | None = None
     teacher_size_mb: float | None = None
+    gate_results: dict = field(default_factory=dict)
+    passed: bool = True
 
 
 class LatencyProfiler:
@@ -177,6 +180,31 @@ def generate_markdown(result: BenchmarkResult, output_path: Path) -> None:
     log.info("Markdown report → %s", output_path)
 
 
+def evaluate_gates(result: BenchmarkResult, args: argparse.Namespace) -> None:
+    """Check benchmark results against acceptance thresholds; update result in place."""
+    gates: dict[str, bool] = {}
+    if args.max_size_mb is not None:
+        gates["max_size_mb"] = result.model_size_mb <= args.max_size_mb
+    if args.max_latency_ms_p95 is not None:
+        gates["max_latency_ms_p95"] = result.latency_ms.get("p95", 0.0) <= args.max_latency_ms_p95
+    if args.min_accuracy is not None and result.accuracy:
+        acc = result.accuracy.get("accuracy") or result.accuracy.get("f1") or 0.0
+        gates["min_accuracy"] = float(acc) >= args.min_accuracy
+    result.gate_results = gates
+    result.passed = all(gates.values()) if gates else True
+
+    if gates:
+        print(f"\n{'='*50}")
+        print("  BENCHMARK GATES")
+        print(f"{'='*50}")
+        for criterion, ok in gates.items():
+            symbol = "PASS" if ok else "FAIL"
+            print(f"  [{symbol}] {criterion}")
+        overall = "ALL PASSED" if result.passed else "FAILED"
+        print(f"  Overall: {overall}")
+        print(f"{'='*50}\n")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Benchmark a compressed model")
     parser.add_argument(
@@ -195,6 +223,18 @@ def main() -> None:
     parser.add_argument("--output-md", type=Path, help="Markdown output path")
     parser.add_argument("--teacher-size-mb", type=float, help="Teacher model size for comparison")
     parser.add_argument("--teacher-name", help="Teacher model name for report")
+    parser.add_argument(
+        "--max-size-mb", type=float, default=None, help="Gate: fail if model exceeds this size"
+    )
+    parser.add_argument(
+        "--max-latency-ms-p95",
+        type=float,
+        default=None,
+        help="Gate: fail if p95 latency exceeds this",
+    )
+    parser.add_argument(
+        "--min-accuracy", type=float, default=None, help="Gate: fail if accuracy falls below this"
+    )
     args = parser.parse_args()
 
     model_path = args.model
@@ -237,6 +277,8 @@ def main() -> None:
         teacher_size_mb=args.teacher_size_mb,
     )
 
+    evaluate_gates(result, args)
+
     if args.output_json:
         args.output_json.parent.mkdir(parents=True, exist_ok=True)
         args.output_json.write_text(json.dumps(asdict(result), indent=2))
@@ -256,6 +298,9 @@ def main() -> None:
     print()
     print(f"  Latency:    mean={latency['mean']:.1f} ms | p95={latency['p95']:.1f} ms")
     print(f"{'='*50}\n")
+
+    if not result.passed:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
