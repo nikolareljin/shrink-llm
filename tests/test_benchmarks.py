@@ -106,8 +106,9 @@ class TestLatencyProfiler:
         assert result["mean"] >= 0
 
     def test_zero_benchmark_runs_raises(self, monkeypatch, tmp_path):
-        from scripts.benchmark import main
         import pytest
+
+        from scripts.benchmark import main
 
         model_file = tmp_path / "model.onnx"
         model_file.write_bytes(b"\x00" * 100)
@@ -120,8 +121,9 @@ class TestLatencyProfiler:
         assert exc_info.value.code == 2
 
     def test_negative_warmup_runs_raises(self, monkeypatch, tmp_path):
-        from scripts.benchmark import main
         import pytest
+
+        from scripts.benchmark import main
 
         model_file = tmp_path / "model.onnx"
         model_file.write_bytes(b"\x00" * 100)
