@@ -8,7 +8,7 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
-- Stable artifact manifest schema v1: pipeline-level metadata (`version`, `pipeline_run_id`, `model_id`, `task`, `config_path`, `config_hash`, `total_stages`) is now written to `manifest.json` at pipeline start before any stage runs, resolving issue #21.
+- Stable artifact manifest schema v1: pipeline-level metadata (`version`, `pipeline_run_id`, `model_id`, `task`, `config_path`, `config_hash`, `total_stages`) is now written to `manifest.json` at pipeline start before any stage runs, addressing the schema and per-stage tracking aspects of issue #21.
 - Per-stage artifact tracking: files created during each stage are discovered via directory snapshot diff and recorded in the manifest with relative paths and sizes in MB.
 - Per-stage `exit_code` and structured `error` message in manifest stage records; failure records now include the non-zero exit code and a human-readable reason.
 - Benchmark acceptance gates: `--max-size-mb`, `--max-latency-ms-p95`, and `--min-accuracy` CLI args; `benchmark.py` exits with code 1 when any threshold is not met, resolving issue #24.
