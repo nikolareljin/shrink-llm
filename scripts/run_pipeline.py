@@ -526,11 +526,13 @@ def _collect_new_files(
 ) -> list[dict]:
     """Return files and directories created or overwritten since the before snapshot.
 
-    Newly created directories at any depth are recorded as single artifacts
-    (total size = sum of contained files), covering package-format outputs like
-    .mlpackage and GPTQ dirs. Files inside newly-captured directories are not
-    listed separately. Files under pre-existing directories are checked
-    recursively so deeper new/changed outputs are not missed.
+    Directories at any depth are recorded as single artifacts (total size = sum
+    of contained files) when they are new or their snapshot tuple changed
+    (mtime_ns, st_nlink). This covers both freshly-created and regenerated
+    package-format outputs like .mlpackage and GPTQ dirs. Files inside captured
+    directories are not listed separately. Pre-existing unchanged directories
+    are recursed into so new/changed files and sub-directories inside them are
+    not missed.
 
     scan_root limits scanning to a subdirectory of output_dir when a stage is
     known to write only within that subtree, reducing per-stage filesystem cost.
@@ -550,10 +552,17 @@ def _collect_new_files(
             return
 
         if is_dir:
-            if path not in skip_roots and path not in before:
-                size_mb = round(_dir_size(path) / 1_000_000, 3)
-                result.append({"path": str(rel_path), "size_mb": size_mb})
-                return
+            if path not in skip_roots:
+                try:
+                    s = path.stat()
+                    dir_tuple = (s.st_mtime_ns, s.st_nlink)
+                except OSError as exc:
+                    log.warning("Skipping unreadable directory %s: %s", path, exc)
+                    return
+                if path not in before or dir_tuple != before[path]:
+                    size_mb = round(_dir_size(path) / 1_000_000, 3)
+                    result.append({"path": str(rel_path), "size_mb": size_mb})
+                    return
             try:
                 children = sorted(path.iterdir())
             except OSError as exc:

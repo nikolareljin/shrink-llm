@@ -366,7 +366,9 @@ class TestManifestHelpers:
     def test_collect_new_files_detects_new_subdir_inside_preexisting_dir(self, tmp_path):
         from scripts.run_pipeline import _collect_new_files, _snapshot_dir
 
-        # Pre-existing benchmarks/ dir; stage creates benchmarks/run_001/ inside it
+        # Pre-existing benchmarks/ dir; stage creates benchmarks/run_001/ inside it.
+        # Adding a subdir changes benchmarks/'s st_nlink so the whole dir is recorded
+        # as a single artifact (consistent with how new dirs are handled).
         existing_dir = tmp_path / "benchmarks"
         existing_dir.mkdir()
         before = _snapshot_dir(tmp_path)
@@ -378,7 +380,7 @@ class TestManifestHelpers:
         result = _collect_new_files(tmp_path, before)
 
         paths = [r["path"] for r in result]
-        assert "benchmarks/run_001" in paths
+        assert "benchmarks" in paths
         assert not any("result.json" in p for p in paths)
 
     def test_collect_new_files_reports_size(self, tmp_path):
@@ -425,18 +427,36 @@ class TestManifestHelpers:
         assert result[0]["path"] == "model.mlpackage"
         assert result[0]["size_mb"] == pytest.approx(1.0, abs=0.001)
 
-    def test_collect_new_files_lists_files_inside_preexisting_dir(self, tmp_path):
+    def test_collect_new_files_records_changed_preexisting_dir_as_artifact(self, tmp_path):
         from scripts.run_pipeline import _collect_new_files, _snapshot_dir
 
-        # Pre-existing subdir (e.g. benchmarks/) was there before the stage
+        # Pre-existing subdir (e.g. benchmarks/) was there before the stage.
+        # Adding a file changes its mtime so the dir itself is recorded as a
+        # single artifact (same as new dirs).  Use scan_root when per-file
+        # granularity inside a container dir is needed (see benchmark stage).
         existing_dir = tmp_path / "benchmarks"
         existing_dir.mkdir()
         before = _snapshot_dir(tmp_path)
 
-        # Stage adds a file inside it
         (existing_dir / "result.json").write_bytes(b"{}" * 10)
 
         result = _collect_new_files(tmp_path, before)
+
+        assert len(result) == 1
+        assert result[0]["path"] == "benchmarks"
+
+    def test_collect_new_files_with_scan_root_lists_individual_files_in_container(self, tmp_path):
+        from scripts.run_pipeline import _collect_new_files, _snapshot_dir
+
+        # With scan_root the container dir is in skip_roots so we recurse into it
+        # and capture the specific new file — this is the benchmark stage pattern.
+        existing_dir = tmp_path / "benchmarks"
+        existing_dir.mkdir()
+        before = _snapshot_dir(tmp_path, scan_root=existing_dir)
+
+        (existing_dir / "result.json").write_bytes(b"{}" * 10)
+
+        result = _collect_new_files(tmp_path, before, scan_root=existing_dir)
 
         assert len(result) == 1
         assert result[0]["path"] == "benchmarks/result.json"
@@ -444,7 +464,9 @@ class TestManifestHelpers:
     def test_collect_new_files_detects_deep_file_in_preexisting_nested_dir(self, tmp_path):
         from scripts.run_pipeline import _collect_new_files, _snapshot_dir
 
-        # Pre-existing benchmarks/run_001/ exists; stage adds a new file inside it (depth 2)
+        # Pre-existing benchmarks/run_001/ exists; stage adds a new file inside it (depth 2).
+        # benchmarks/ mtime is unchanged (no direct children added), so we recurse into it.
+        # run_001/ mtime changes (new file added), so it is recorded as a dir artifact.
         run_dir = tmp_path / "benchmarks" / "run_001"
         run_dir.mkdir(parents=True)
         (run_dir / "old.json").write_bytes(b"{}")
@@ -455,8 +477,30 @@ class TestManifestHelpers:
         result = _collect_new_files(tmp_path, before)
 
         paths = [r["path"] for r in result]
-        assert "benchmarks/run_001/new.json" in paths
+        assert "benchmarks/run_001" in paths
         assert not any("old.json" in p for p in paths)
+
+    def test_collect_new_files_detects_regenerated_directory_as_single_artifact(self, tmp_path):
+        import os
+
+        from scripts.run_pipeline import _collect_new_files, _snapshot_dir
+
+        # Pre-existing .mlpackage dir (package-format output) is regenerated in-place.
+        # Its mtime changes so it is captured as a single dir artifact, not expanded.
+        pkg = tmp_path / "model.mlpackage"
+        pkg.mkdir()
+        (pkg / "weights.bin").write_bytes(b"\x00" * 100)
+        before = _snapshot_dir(tmp_path)
+
+        # Simulate regeneration: overwrite the file and bump pkg mtime
+        (pkg / "weights.bin").write_bytes(b"\x00" * 200)
+        prev = before[pkg][0]
+        os.utime(pkg, ns=(prev + 1_000_000_000, prev + 1_000_000_000))
+
+        result = _collect_new_files(tmp_path, before)
+
+        assert len(result) == 1
+        assert result[0]["path"] == "model.mlpackage"
 
     def test_collect_new_files_returns_empty_when_scan_root_missing(self, tmp_path):
         from scripts.run_pipeline import _collect_new_files, _snapshot_dir
