@@ -15,7 +15,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from statistics import mean, quantiles
+from statistics import mean
 
 import numpy as np
 
@@ -62,12 +62,12 @@ class LatencyProfiler:
             inference_fn(inputs)
             times.append((time.perf_counter() - t0) * 1000)
 
-        qs = quantiles(times, n=100)
+        arr = np.array(times)
         return {
             "mean": mean(times),
-            "p50": qs[49],
-            "p95": qs[94],
-            "p99": qs[98],
+            "p50": float(np.percentile(arr, 50)),
+            "p95": float(np.percentile(arr, 95)),
+            "p99": float(np.percentile(arr, 99)),
             "min": min(times),
             "max": max(times),
         }
