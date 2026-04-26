@@ -486,16 +486,28 @@ class TestManifestHelpers:
         assert "--max-size-mb" not in args
         assert any("success_criteria" in r.message for r in caplog.records)
 
-    def test_benchmark_stage_args_maps_min_f1_to_min_accuracy(self, tmp_path):
+    def test_benchmark_stage_args_does_not_inject_min_accuracy_until_implemented(
+        self, tmp_path, caplog
+    ):
+        import logging
+
         from scripts.run_pipeline import build_stage_args, init_pipeline_state
 
         config = _base_config()
-        config["success_criteria"] = {"min_f1": 0.80}
+        config["success_criteria"] = {"min_f1": 0.80, "min_accuracy": 0.85}
         state = init_pipeline_state(config, tmp_path)
 
-        args = build_stage_args("benchmark", config, tmp_path, state)
-        assert "--min-accuracy" in args
-        assert args[args.index("--min-accuracy") + 1] == "0.8"
+        with caplog.at_level(logging.DEBUG, logger="scripts.run_pipeline"):
+            args = build_stage_args("benchmark", config, tmp_path, state)
+
+        # Accuracy gates not yet wired — must not appear in CLI args
+        assert "--min-accuracy" not in args
+        # Known-unimplemented keys must NOT produce WARNING records
+        assert not any(
+            "min_f1" in r.message or "min_accuracy" in r.message
+            for r in caplog.records
+            if r.levelno >= logging.WARNING
+        )
 
     def test_benchmark_stage_args_warns_on_truly_unknown_criteria(self, tmp_path, caplog):
         import logging
@@ -517,7 +529,12 @@ class TestManifestHelpers:
         from scripts.run_pipeline import build_stage_args, init_pipeline_state
 
         config = _base_config()
-        config["success_criteria"] = {"max_cer": 0.05, "max_accuracy_drop_pct": 5}
+        config["success_criteria"] = {
+            "max_cer": 0.05,
+            "max_accuracy_drop_pct": 5,
+            "min_accuracy": 0.9,
+            "min_f1": 0.8,
+        }
         state = init_pipeline_state(config, tmp_path)
 
         with caplog.at_level(logging.WARNING, logger="scripts.run_pipeline"):
@@ -525,7 +542,8 @@ class TestManifestHelpers:
 
         # Known-unimplemented keys must NOT produce WARNING records
         assert not any(
-            "max_cer" in r.message or "max_accuracy_drop_pct" in r.message for r in caplog.records
+            any(k in r.message for k in ("max_cer", "max_accuracy_drop_pct", "min_accuracy", "min_f1"))
+            for r in caplog.records
         )
 
     def test_init_manifest_run_id_has_millisecond_precision(self, tmp_path):

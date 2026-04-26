@@ -452,8 +452,8 @@ def build_stage_args(
                 type(criteria).__name__,
             )
             criteria = {}
-        _implemented_criteria = {"max_size_mb", "max_latency_ms", "min_accuracy", "min_f1"}
-        _known_unimplemented = {"max_cer", "max_accuracy_drop_pct"}
+        _implemented_criteria = {"max_size_mb", "max_latency_ms"}
+        _known_unimplemented = {"max_cer", "max_accuracy_drop_pct", "min_accuracy", "min_f1"}
         _known_criteria = _implemented_criteria | _known_unimplemented
         for key in sorted(set(criteria) - _known_criteria):
             log.warning(
@@ -470,16 +470,6 @@ def build_stage_args(
             args += ["--max-size-mb", str(criteria["max_size_mb"])]
         if criteria.get("max_latency_ms") is not None:
             args += ["--max-latency-ms-p95", str(criteria["max_latency_ms"])]
-        min_accuracy = criteria.get("min_accuracy")
-        min_f1 = criteria.get("min_f1")
-        if min_accuracy is not None and min_f1 is not None:
-            log.warning(
-                "success_criteria defines both min_accuracy and min_f1; using min_accuracy, ignoring min_f1"
-            )
-        if min_accuracy is None and min_f1 is not None:
-            min_accuracy = min_f1
-        if min_accuracy is not None:
-            args += ["--min-accuracy", str(min_accuracy)]
         return args
 
     return []
@@ -502,17 +492,21 @@ def _dir_size(d: Path) -> int:
     return sum(f.stat().st_size for f in d.rglob("*") if f.is_file())
 
 
-def _snapshot_dir(d: Path) -> dict[Path, tuple[int, int]]:
+def _snapshot_dir(d: Path, scan_root: Path | None = None) -> dict[Path, tuple[int, int]]:
     """Return a recursive snapshot used to detect new or overwritten outputs.
 
     Files at all depths are recorded as (mtime_ns, size).
     Directories at all depths are recorded as (mtime_ns, st_nlink) — a
     lightweight sentinel to detect new or structurally modified directories.
+
+    scan_root limits scanning to a subdirectory of d (e.g. output_dir/benchmarks)
+    when a stage is known to write only within that subtree.
     """
-    if not d.exists():
+    root = scan_root if scan_root is not None else d
+    if not root.exists():
         return {}
     result: dict[Path, tuple[int, int]] = {}
-    for p in d.rglob("*"):
+    for p in root.rglob("*"):
         try:
             s = p.stat()
         except OSError as exc:
@@ -525,7 +519,11 @@ def _snapshot_dir(d: Path) -> dict[Path, tuple[int, int]]:
     return result
 
 
-def _collect_new_files(output_dir: Path, before: dict[Path, tuple[int, int]]) -> list[dict]:
+def _collect_new_files(
+    output_dir: Path,
+    before: dict[Path, tuple[int, int]],
+    scan_root: Path | None = None,
+) -> list[dict]:
     """Return files and directories created or overwritten since the before snapshot.
 
     Newly created directories at any depth are recorded as single artifacts
@@ -533,30 +531,51 @@ def _collect_new_files(output_dir: Path, before: dict[Path, tuple[int, int]]) ->
     .mlpackage and GPTQ dirs. Files inside newly-captured directories are not
     listed separately. Files under pre-existing directories are checked
     recursively so deeper new/changed outputs are not missed.
+
+    scan_root limits scanning to a subdirectory of output_dir when a stage is
+    known to write only within that subtree, reducing per-stage filesystem cost.
+    Artifact paths are always relative to output_dir regardless of scan_root.
     """
+    root = scan_root if scan_root is not None else output_dir
+    skip_roots = {output_dir, root}
     result: list[dict] = []
 
     def _visit(path: Path) -> None:
         rel_path = path.relative_to(output_dir)
 
-        if path.is_dir():
-            if path != output_dir and path not in before:
+        try:
+            is_dir = path.is_dir()
+        except OSError as exc:
+            log.warning("Skipping unreadable or disappearing path %s: %s", path, exc)
+            return
+
+        if is_dir:
+            if path not in skip_roots and path not in before:
                 size_mb = round(_dir_size(path) / 1_000_000, 3)
                 result.append({"path": str(rel_path), "size_mb": size_mb})
                 return
-            for child in sorted(path.iterdir()):
+            try:
+                children = sorted(path.iterdir())
+            except OSError as exc:
+                log.warning("Skipping unreadable directory %s: %s", path, exc)
+                return
+            for child in children:
                 _visit(child)
             return
 
         if rel_path == Path("manifest.json"):
             return
 
-        stat = path.stat()
+        try:
+            stat = path.stat()
+        except OSError as exc:
+            log.warning("Skipping unreadable or disappearing file %s: %s", path, exc)
+            return
         if path not in before or (stat.st_mtime_ns, stat.st_size) != before[path]:
             size_mb = round(stat.st_size / 1_000_000, 3)
             result.append({"path": str(rel_path), "size_mb": size_mb})
 
-    _visit(output_dir)
+    _visit(root)
     return result
 
 
@@ -692,6 +711,11 @@ def main() -> None:
         "convert_onnx_mobile": "convert_to_onnx_mobile",
         "benchmark": "benchmark",
     }
+    # Stages that write only within a known subdirectory of output_dir.
+    # Limits the per-stage filesystem scan to that subtree instead of all of output_dir.
+    _stage_scan_subdirs: dict[str, str] = {
+        "benchmark": "benchmarks",
+    }
 
     manifest_path = args.output_dir / "manifest.json"
     state = init_pipeline_state(config, args.output_dir)
@@ -708,11 +732,13 @@ def main() -> None:
         if not stage_args and stage not in ("export",):
             log.warning("Stage '%s' produced no args, skipping", stage)
             continue
-        before = _snapshot_dir(args.output_dir) if not args.dry_run else {}
+        _subdir = _stage_scan_subdirs.get(stage)
+        scan_root = (args.output_dir / _subdir) if _subdir else None
+        before = _snapshot_dir(args.output_dir, scan_root=scan_root) if not args.dry_run else {}
         exit_code, success = run_stage(script_map[stage], stage_args, dry_run=args.dry_run)
         results[stage] = "OK" if success else "FAILED"
         if not args.dry_run:
-            artifacts = _collect_new_files(args.output_dir, before)
+            artifacts = _collect_new_files(args.output_dir, before, scan_root=scan_root)
             error_obj = (
                 None
                 if success
