@@ -635,17 +635,23 @@ def _update_manifest(
     stage: str,
     args_list: list[str],
     success: bool,
-    exit_code: int = 0,
+    exit_code: int | None = None,
     artifacts: list[dict] | None = None,
     error: dict | None = None,
 ) -> None:
     """Append a stage record to the pipeline manifest JSON."""
+    if success:
+        resolved_exit_code = 0 if exit_code is None else exit_code
+    else:
+        if exit_code is None or exit_code == 0:
+            raise ValueError(f"Failed stage '{stage}' must supply a non-zero exit_code")
+        resolved_exit_code = exit_code
     record: dict = {
         "stage": stage,
         "args": args_list,
         "status": "ok" if success else "failed",
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "exit_code": exit_code,
+        "exit_code": resolved_exit_code,
         "artifacts": artifacts or [],
         "error": error,
     }

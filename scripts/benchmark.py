@@ -266,7 +266,10 @@ def main() -> None:
         help="Gate: fail if p95 latency exceeds this",
     )
     parser.add_argument(
-        "--min-accuracy", type=float, default=None, help="Gate: fail if accuracy falls below this"
+        "--min-accuracy",
+        type=float,
+        default=None,
+        help="Gate: fail if computed accuracy falls below this; skipped when accuracy is unavailable",
     )
     args = parser.parse_args()
 

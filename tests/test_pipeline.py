@@ -216,7 +216,7 @@ class TestUpdateManifest:
 
         path = tmp_path / "manifest.json"
         _update_manifest(path, "export", [], True)
-        _update_manifest(path, "quantize", [], False)
+        _update_manifest(path, "quantize", [], False, exit_code=1)
 
         data = json.loads(path.read_text())
         assert len(data["stages"]) == 2
@@ -279,6 +279,20 @@ class TestUpdateManifest:
         assert rec["exit_code"] == 1
         assert "exited with code 1" in rec["error"]["message"]
         assert rec["error"]["exit_code"] == 1
+
+    def test_raises_when_failed_stage_missing_exit_code(self, tmp_path):
+        from scripts.run_pipeline import _update_manifest
+
+        path = tmp_path / "manifest.json"
+        with pytest.raises(ValueError, match="non-zero exit_code"):
+            _update_manifest(path, "quantize", [], False)
+
+    def test_raises_when_failed_stage_exit_code_is_zero(self, tmp_path):
+        from scripts.run_pipeline import _update_manifest
+
+        path = tmp_path / "manifest.json"
+        with pytest.raises(ValueError, match="non-zero exit_code"):
+            _update_manifest(path, "quantize", [], False, exit_code=0)
 
     def test_records_artifacts_for_successful_stage(self, tmp_path):
         import json
