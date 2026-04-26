@@ -10,6 +10,7 @@ import argparse
 import hashlib
 import json
 import logging
+import stat as _stat
 import subprocess
 import sys
 from collections.abc import Iterable
@@ -445,6 +446,12 @@ def build_stage_args(
         if b.get("dataset"):
             args += ["--dataset", b["dataset"]]
         criteria = config.get("success_criteria") or {}
+        if not isinstance(criteria, dict):
+            log.warning(
+                "success_criteria must be a mapping; got %s — ignoring",
+                type(criteria).__name__,
+            )
+            criteria = {}
         _implemented_criteria = {"max_size_mb", "max_latency_ms", "min_accuracy", "min_f1"}
         _known_unimplemented = {"max_cer", "max_accuracy_drop_pct"}
         _known_criteria = _implemented_criteria | _known_unimplemented
@@ -508,19 +515,35 @@ def _snapshot_dir(d: Path) -> dict[Path, tuple[int, int]]:
     if not d.exists():
         return {}
     result: dict[Path, tuple[int, int]] = {}
-    for p in d.iterdir():
-        if p.is_file():
+    try:
+        top_entries = list(d.iterdir())
+    except OSError as exc:
+        log.warning("Could not scan output dir %s: %s — snapshot will be empty", d, exc)
+        return result
+    for p in top_entries:
+        try:
             s = p.stat()
+        except OSError as exc:
+            log.warning("Skipping unreadable path %s in snapshot: %s", p, exc)
+            continue
+        if _stat.S_ISREG(s.st_mode):
             result[p] = (s.st_mtime_ns, s.st_size)
-        elif p.is_dir():
-            s = p.stat()
+        elif _stat.S_ISDIR(s.st_mode):
             result[p] = (s.st_mtime_ns, s.st_nlink)
-            for child in p.iterdir():
-                if child.is_file():
+            try:
+                child_entries = list(p.iterdir())
+            except OSError as exc:
+                log.warning("Could not scan subdir %s: %s — skipping", p, exc)
+                continue
+            for child in child_entries:
+                try:
                     cs = child.stat()
+                except OSError as exc:
+                    log.warning("Skipping unreadable path %s in snapshot: %s", child, exc)
+                    continue
+                if _stat.S_ISREG(cs.st_mode):
                     result[child] = (cs.st_mtime_ns, cs.st_size)
-                elif child.is_dir():
-                    cs = child.stat()
+                elif _stat.S_ISDIR(cs.st_mode):
                     result[child] = (cs.st_mtime_ns, cs.st_nlink)
     return result
 
