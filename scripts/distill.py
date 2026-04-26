@@ -25,6 +25,8 @@ from transformers import (
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger(__name__)
 
+SUPPORTED_TASKS = ("legal",)
+
 
 @dataclass
 class DistillationConfig:
@@ -145,7 +147,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Knowledge distillation training")
     parser.add_argument("--teacher", required=True, help="Teacher model HuggingFace ID or path")
     parser.add_argument("--student", required=True, help="Student model HuggingFace ID or path")
-    parser.add_argument("--task", required=True, choices=["ocr", "legal", "baby_cry"])
+    parser.add_argument(
+        "--task",
+        required=True,
+        choices=list(SUPPORTED_TASKS),
+        help="Task type. Distillation currently supports causal-LM legal models only.",
+    )
     parser.add_argument("--dataset", required=True, type=Path, help="Training dataset directory")
     parser.add_argument(
         "--output-dir", required=True, type=Path, help="Output directory for distilled model"

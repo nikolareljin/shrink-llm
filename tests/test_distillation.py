@@ -76,3 +76,10 @@ class TestHiddenStateProjector:
         x = torch.randn(2, 10, 512)
         out = proj(x)
         assert out.shape == (2, 10, 1024)
+
+
+class TestSupportedTasks:
+    def test_distillation_supports_only_legal_task(self):
+        from scripts.distill import SUPPORTED_TASKS
+
+        assert SUPPORTED_TASKS == ("legal",)

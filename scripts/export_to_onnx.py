@@ -41,7 +41,7 @@ TASK_CONFIGS: dict[str, dict] = {
             "logits": {0: "batch_size", 1: "sequence_length"},
         },
     },
-    "baby_cry": {
+    "audio": {
         "model_class": "AutoModelForAudioClassification",
         "processor_class": "AutoFeatureExtractor",
         "input_names": ["input_values"],
@@ -76,7 +76,7 @@ def load_model(model_id: str, task: str, device: str) -> tuple:
 
         processor = AutoTokenizer.from_pretrained(model_id)
         model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.float32)
-    elif task == "baby_cry":
+    elif task == "audio":
         from transformers import AutoFeatureExtractor, AutoModelForAudioClassification
 
         processor = AutoFeatureExtractor.from_pretrained(model_id)
@@ -103,7 +103,7 @@ def build_dummy_inputs(task: str, device: str) -> dict[str, torch.Tensor]:
             "input_ids": torch.randint(0, 1000, (1, 128), device=device),
             "attention_mask": torch.ones(1, 128, dtype=torch.long, device=device),
         }
-    elif task in ("baby_cry",):
+    elif task in ("audio",):
         return {"input_values": torch.randn(1, 16000, device=device)}
     elif task == "classification":
         return {"pixel_values": torch.randn(1, 3, 224, 224, device=device)}

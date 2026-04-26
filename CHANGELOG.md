@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-04-21
+
+### Changed
+
+- Renamed the `baby_cry` task identifier to `audio` throughout all scripts, configs, datasets, tests, and documentation. The audio classification pipeline is unchanged; only the internal task name is updated for the public release.
+
+### Added
+
+- Wired all pipeline stages in `run_pipeline.py`: `prune`, `distill`, `convert_tflite`, `convert_coreml`, and `convert_onnx_mobile` now generate correct CLI argument lists from the YAML config. Previously these stages returned empty args and were silently skipped.
+- Added artifact manifest output to `run_pipeline.py`: each completed stage appends a record to `manifest.json` in the output directory with stage name, args, status, and timestamp.
+- Implemented attention head pruning in `prune.py`: the `--method attention_heads` option now computes head importance scores via forward-pass hooks and zeros out the lowest-scoring head weight slices in Q/K/V projections. Falls back to magnitude pruning when the model architecture does not expose attention weights.
+- Added synthetic dataloader helpers to `prune.py` so attention head and MLP pruning can run without a real dataset.
+
 ### Fixed
 
 - Resolved Python CI lint failures by migrating deprecated Ruff lint settings into `tool.ruff.lint`, removing unused imports and locals, and updating optional annotations to modern `X | None` syntax.
