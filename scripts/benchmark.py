@@ -269,6 +269,11 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    if args.benchmark_runs < 1:
+        parser.error("--benchmark-runs must be >= 1")
+    if args.warmup_runs < 0:
+        parser.error("--warmup-runs must be >= 0")
+
     model_path = args.model
     model_path_obj = Path(model_path)
     if model_path_obj.is_dir():
