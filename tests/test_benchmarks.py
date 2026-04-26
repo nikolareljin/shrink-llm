@@ -104,3 +104,93 @@ class TestLatencyProfiler:
         assert "mean" in result
         assert "p95" in result
         assert result["mean"] >= 0
+
+
+def _make_result(**overrides):
+    from scripts.benchmark import BenchmarkResult
+
+    defaults = dict(
+        run_id="test_001",
+        timestamp="2026-04-25T00:00:00Z",
+        model_name="test_model",
+        model_path="/tmp/test.onnx",
+        model_size_mb=10.0,
+        task="legal",
+        runtime="onnxruntime",
+        latency_ms={"mean": 50.0, "p95": 80.0, "p99": 90.0, "p50": 45.0, "min": 40.0, "max": 100.0},
+    )
+    defaults.update(overrides)
+    return BenchmarkResult(**defaults)
+
+
+def _make_args(**kwargs):
+    import argparse
+
+    defaults = dict(max_size_mb=None, max_latency_ms_p95=None, min_accuracy=None)
+    defaults.update(kwargs)
+    return argparse.Namespace(**defaults)
+
+
+class TestEvaluateGates:
+    def test_no_thresholds_passes(self):
+        from scripts.benchmark import evaluate_gates
+
+        result = _make_result()
+        evaluate_gates(result, _make_args())
+        assert result.passed is True
+        assert result.gate_results == {}
+
+    def test_size_within_limit_passes(self):
+        from scripts.benchmark import evaluate_gates
+
+        result = _make_result(model_size_mb=10.0)
+        evaluate_gates(result, _make_args(max_size_mb=20.0))
+        assert result.gate_results["max_size_mb"] is True
+        assert result.passed is True
+
+    def test_size_exceeds_limit_fails(self):
+        from scripts.benchmark import evaluate_gates
+
+        result = _make_result(model_size_mb=50.0)
+        evaluate_gates(result, _make_args(max_size_mb=20.0))
+        assert result.gate_results["max_size_mb"] is False
+        assert result.passed is False
+
+    def test_latency_within_limit_passes(self):
+        from scripts.benchmark import evaluate_gates
+
+        result = _make_result()
+        evaluate_gates(result, _make_args(max_latency_ms_p95=100.0))
+        assert result.gate_results["max_latency_ms_p95"] is True
+        assert result.passed is True
+
+    def test_latency_exceeds_limit_fails(self):
+        from scripts.benchmark import evaluate_gates
+
+        result = _make_result()
+        evaluate_gates(result, _make_args(max_latency_ms_p95=50.0))
+        assert result.gate_results["max_latency_ms_p95"] is False
+        assert result.passed is False
+
+    def test_multiple_gates_all_must_pass(self):
+        from scripts.benchmark import evaluate_gates
+
+        result = _make_result(model_size_mb=10.0)
+        # size passes, latency fails
+        evaluate_gates(result, _make_args(max_size_mb=20.0, max_latency_ms_p95=50.0))
+        assert result.gate_results["max_size_mb"] is True
+        assert result.gate_results["max_latency_ms_p95"] is False
+        assert result.passed is False
+
+    def test_gate_results_included_in_json(self):
+        from dataclasses import asdict
+
+        from scripts.benchmark import evaluate_gates
+
+        result = _make_result(model_size_mb=10.0)
+        evaluate_gates(result, _make_args(max_size_mb=20.0))
+        d = asdict(result)
+        assert "gate_results" in d
+        assert "passed" in d
+        assert d["gate_results"]["max_size_mb"] is True
+        assert d["passed"] is True

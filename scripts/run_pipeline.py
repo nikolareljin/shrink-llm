@@ -7,6 +7,7 @@ Runs stages: prune → distill → export → quantize → convert → benchmark
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import subprocess
@@ -40,17 +41,17 @@ STAGE_PREREQUISITES = {
 }
 
 
-def run_stage(script: str, args_list: list[str], dry_run: bool = False) -> bool:
+def run_stage(script: str, args_list: list[str], dry_run: bool = False) -> tuple[int, bool]:
     cmd = [sys.executable, f"scripts/{script}.py"] + args_list
     log.info("Running: %s", " ".join(cmd))
     if dry_run:
         log.info("[DRY RUN] Skipping execution.")
-        return True
+        return 0, True
     result = subprocess.run(cmd, capture_output=False)
     if result.returncode != 0:
         log.error("Stage '%s' failed with return code %d", script, result.returncode)
-        return False
-    return True
+        return result.returncode, False
+    return result.returncode, True
 
 
 def load_config(config_path: Path) -> dict:
@@ -443,18 +444,72 @@ def build_stage_args(
         ]
         if b.get("dataset"):
             args += ["--dataset", b["dataset"]]
+        criteria = config.get("success_criteria") or {}
+        if criteria.get("max_size_mb") is not None:
+            args += ["--max-size-mb", str(criteria["max_size_mb"])]
+        if criteria.get("max_latency_ms") is not None:
+            args += ["--max-latency-ms-p95", str(criteria["max_latency_ms"])]
+        if criteria.get("min_accuracy") is not None:
+            args += ["--min-accuracy", str(criteria["min_accuracy"])]
         return args
 
     return []
 
 
-def _update_manifest(manifest_path: Path, stage: str, args_list: list[str], success: bool) -> None:
+def _sha256_file(path: Path) -> str:
+    return f"sha256:{hashlib.sha256(path.read_bytes()).hexdigest()}"
+
+
+def _snapshot_dir(d: Path) -> set[Path]:
+    return set(d.rglob("*")) if d.exists() else set()
+
+
+def _collect_new_files(output_dir: Path, before: set[Path]) -> list[dict]:
+    after = set(output_dir.rglob("*"))
+    result = []
+    for p in sorted(after - before):
+        if p.is_file() and p.name != "manifest.json":
+            size_mb = round(p.stat().st_size / 1_048_576, 3)
+            result.append({"path": str(p.relative_to(output_dir)), "size_mb": size_mb})
+    return result
+
+
+def _init_manifest(manifest_path: Path, config: dict, config_path: Path, stages: list[str]) -> None:
+    """Write pipeline-level metadata to the manifest file before stages run."""
+    run_id = (
+        f"{config.get('task', 'unknown')}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
+    )
+    manifest: dict = {
+        "version": "1",
+        "pipeline_run_id": run_id,
+        "model_id": config.get("model", ""),
+        "task": config.get("task", ""),
+        "config_path": str(config_path),
+        "config_hash": _sha256_file(config_path) if config_path.exists() else "",
+        "total_stages": len(stages),
+        "stages": [],
+    }
+    manifest_path.write_text(json.dumps(manifest, indent=2))
+
+
+def _update_manifest(
+    manifest_path: Path,
+    stage: str,
+    args_list: list[str],
+    success: bool,
+    exit_code: int = 0,
+    artifacts: list[dict] | None = None,
+    error: str | None = None,
+) -> None:
     """Append a stage record to the pipeline manifest JSON."""
     record: dict = {
         "stage": stage,
         "args": args_list,
         "status": "ok" if success else "failed",
         "timestamp": datetime.now(timezone.utc).isoformat(),
+        "exit_code": exit_code,
+        "artifacts": artifacts or [],
+        "error": error,
     }
     existing: dict = {"stages": []}
     if manifest_path.exists():
@@ -537,15 +592,29 @@ def main() -> None:
     for stage in unknown_stages:
         log.warning("Unknown stage '%s' — skipping", stage)
 
+    if not args.dry_run:
+        _init_manifest(manifest_path, config, args.config, stages)
+
     for stage in stages:
         stage_args = build_stage_args(stage, config, args.output_dir, state, dry_run=args.dry_run)
         if not stage_args and stage not in ("export",):
             log.warning("Stage '%s' produced no args, skipping", stage)
             continue
-        success = run_stage(script_map[stage], stage_args, dry_run=args.dry_run)
+        before = _snapshot_dir(args.output_dir)
+        exit_code, success = run_stage(script_map[stage], stage_args, dry_run=args.dry_run)
         results[stage] = "OK" if success else "FAILED"
         if not args.dry_run:
-            _update_manifest(manifest_path, stage, stage_args, success)
+            artifacts = _collect_new_files(args.output_dir, before)
+            error_msg = None if success else f"Stage '{stage}' exited with code {exit_code}"
+            _update_manifest(
+                manifest_path,
+                stage,
+                stage_args,
+                success,
+                exit_code=exit_code,
+                artifacts=artifacts,
+                error=error_msg,
+            )
         if success:
             update_pipeline_state(stage, state, config, args.output_dir, dry_run=args.dry_run)
         if not success:

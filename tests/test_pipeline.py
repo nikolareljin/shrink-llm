@@ -205,6 +205,9 @@ class TestUpdateManifest:
         assert rec["stage"] == "export"
         assert rec["args"] == ["--model", "m"]
         assert rec["status"] == "ok"
+        assert rec["exit_code"] == 0
+        assert rec["artifacts"] == []
+        assert rec["error"] is None
 
     def test_appends_to_existing_manifest(self, tmp_path):
         import json
@@ -260,3 +263,92 @@ class TestUpdateManifest:
         assert data["extra"] == "kept"
         assert len(data["stages"]) == 1
         assert data["stages"][0]["stage"] == "benchmark"
+
+    def test_records_exit_code_and_error_on_failure(self, tmp_path):
+        import json
+
+        from scripts.run_pipeline import _update_manifest
+
+        path = tmp_path / "manifest.json"
+        _update_manifest(
+            path, "export", [], False, exit_code=1, error="Stage 'export' exited with code 1"
+        )
+
+        data = json.loads(path.read_text())
+        rec = data["stages"][0]
+        assert rec["status"] == "failed"
+        assert rec["exit_code"] == 1
+        assert "exited with code 1" in rec["error"]
+
+    def test_records_artifacts_for_successful_stage(self, tmp_path):
+        import json
+
+        from scripts.run_pipeline import _update_manifest
+
+        path = tmp_path / "manifest.json"
+        artifacts = [{"path": "model_base.onnx", "size_mb": 42.5}]
+        _update_manifest(path, "export", [], True, exit_code=0, artifacts=artifacts)
+
+        data = json.loads(path.read_text())
+        rec = data["stages"][0]
+        assert rec["artifacts"] == [{"path": "model_base.onnx", "size_mb": 42.5}]
+
+
+class TestManifestHelpers:
+    def test_init_manifest_writes_metadata(self, tmp_path):
+        import json
+
+        from scripts.run_pipeline import _init_manifest
+
+        config = {"model": "org/demo-model", "task": "legal"}
+        config_path = tmp_path / "pipeline.yaml"
+        config_path.write_text("model: org/demo-model\ntask: legal\n")
+        manifest_path = tmp_path / "manifest.json"
+
+        _init_manifest(manifest_path, config, config_path, ["export", "quantize"])
+
+        data = json.loads(manifest_path.read_text())
+        assert data["version"] == "1"
+        assert data["model_id"] == "org/demo-model"
+        assert data["task"] == "legal"
+        assert data["total_stages"] == 2
+        assert data["config_hash"].startswith("sha256:")
+        assert "pipeline_run_id" in data
+        assert data["stages"] == []
+
+    def test_collect_new_files_excludes_manifest(self, tmp_path):
+        from scripts.run_pipeline import _collect_new_files
+
+        before = set(tmp_path.rglob("*"))
+        (tmp_path / "model.onnx").write_bytes(b"\x00" * 1024)
+        (tmp_path / "manifest.json").write_text("{}")
+
+        result = _collect_new_files(tmp_path, before)
+
+        paths = [r["path"] for r in result]
+        assert "model.onnx" in paths
+        assert "manifest.json" not in paths
+
+    def test_collect_new_files_reports_size(self, tmp_path):
+        from scripts.run_pipeline import _collect_new_files
+
+        before = set(tmp_path.rglob("*"))
+        (tmp_path / "artifact.onnx").write_bytes(b"\x00" * 2_097_152)  # 2 MiB
+
+        result = _collect_new_files(tmp_path, before)
+
+        assert len(result) == 1
+        assert result[0]["size_mb"] == pytest.approx(2.0, abs=0.01)
+
+    def test_benchmark_stage_args_include_success_criteria(self, tmp_path):
+        from scripts.run_pipeline import build_stage_args, init_pipeline_state
+
+        config = _base_config()
+        config["success_criteria"] = {"max_size_mb": 20, "max_latency_ms": 100}
+        state = init_pipeline_state(config, tmp_path)
+
+        args = build_stage_args("benchmark", config, tmp_path, state)
+        assert "--max-size-mb" in args
+        assert args[args.index("--max-size-mb") + 1] == "20"
+        assert "--max-latency-ms-p95" in args
+        assert args[args.index("--max-latency-ms-p95") + 1] == "100"
