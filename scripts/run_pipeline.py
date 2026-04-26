@@ -550,12 +550,13 @@ def _collect_new_files(output_dir: Path, before: dict[Path, tuple[int, int]]) ->
         elif p.is_dir() and p not in new_dirs:
             candidates.extend(child for child in p.iterdir() if child.is_file())
     for p in sorted(candidates):
-        if p.name == "manifest.json":
+        rel_path = p.relative_to(output_dir)
+        if rel_path == Path("manifest.json"):
             continue
         stat = p.stat()
         if p not in before or (stat.st_mtime_ns, stat.st_size) != before[p]:
             size_mb = round(stat.st_size / 1_000_000, 3)
-            result.append({"path": str(p.relative_to(output_dir)), "size_mb": size_mb})
+            result.append({"path": str(rel_path), "size_mb": size_mb})
     return result
 
 
