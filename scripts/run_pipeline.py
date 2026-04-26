@@ -575,6 +575,8 @@ def _collect_new_files(
             size_mb = round(stat.st_size / 1_000_000, 3)
             result.append({"path": str(rel_path), "size_mb": size_mb})
 
+    if not root.exists():
+        return result
     _visit(root)
     return result
 

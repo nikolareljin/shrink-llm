@@ -458,6 +458,15 @@ class TestManifestHelpers:
         assert "benchmarks/run_001/new.json" in paths
         assert not any("old.json" in p for p in paths)
 
+    def test_collect_new_files_returns_empty_when_scan_root_missing(self, tmp_path):
+        from scripts.run_pipeline import _collect_new_files, _snapshot_dir
+
+        before = _snapshot_dir(tmp_path)
+        missing = tmp_path / "benchmarks"  # never created
+
+        result = _collect_new_files(tmp_path, before, scan_root=missing)
+        assert result == []
+
     def test_benchmark_stage_args_include_success_criteria(self, tmp_path):
         from scripts.run_pipeline import build_stage_args, init_pipeline_state
 
