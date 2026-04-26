@@ -194,3 +194,19 @@ class TestEvaluateGates:
         assert "passed" in d
         assert d["gate_results"]["max_size_mb"] is True
         assert d["passed"] is True
+
+    def test_min_accuracy_fails_when_accuracy_empty(self):
+        from scripts.benchmark import evaluate_gates
+
+        result = _make_result(accuracy={})
+        evaluate_gates(result, _make_args(min_accuracy=0.9))
+        assert result.gate_results["min_accuracy"] is False
+        assert result.passed is False
+
+    def test_min_accuracy_passes_when_data_available(self):
+        from scripts.benchmark import evaluate_gates
+
+        result = _make_result(accuracy={"accuracy": 0.95})
+        evaluate_gates(result, _make_args(min_accuracy=0.9))
+        assert result.gate_results["min_accuracy"] is True
+        assert result.passed is True

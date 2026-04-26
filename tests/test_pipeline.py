@@ -317,9 +317,9 @@ class TestManifestHelpers:
         assert data["stages"] == []
 
     def test_collect_new_files_excludes_manifest(self, tmp_path):
-        from scripts.run_pipeline import _collect_new_files
+        from scripts.run_pipeline import _collect_new_files, _snapshot_dir
 
-        before = set(tmp_path.rglob("*"))
+        before = _snapshot_dir(tmp_path)
         (tmp_path / "model.onnx").write_bytes(b"\x00" * 1024)
         (tmp_path / "manifest.json").write_text("{}")
 
@@ -330,15 +330,31 @@ class TestManifestHelpers:
         assert "manifest.json" not in paths
 
     def test_collect_new_files_reports_size(self, tmp_path):
-        from scripts.run_pipeline import _collect_new_files
+        from scripts.run_pipeline import _collect_new_files, _snapshot_dir
 
-        before = set(tmp_path.rglob("*"))
+        before = _snapshot_dir(tmp_path)
         (tmp_path / "artifact.onnx").write_bytes(b"\x00" * 2_097_152)  # 2 MiB
 
         result = _collect_new_files(tmp_path, before)
 
         assert len(result) == 1
         assert result[0]["size_mb"] == pytest.approx(2.0, abs=0.01)
+
+    def test_collect_new_files_detects_overwritten_file(self, tmp_path):
+        import time
+
+        from scripts.run_pipeline import _collect_new_files, _snapshot_dir
+
+        artifact = tmp_path / "model.onnx"
+        artifact.write_bytes(b"\x00" * 512)
+        before = _snapshot_dir(tmp_path)
+        time.sleep(0.01)  # ensure mtime advances
+        artifact.write_bytes(b"\x00" * 1024)  # overwrite same path
+
+        result = _collect_new_files(tmp_path, before)
+
+        assert len(result) == 1
+        assert result[0]["path"] == "model.onnx"
 
     def test_benchmark_stage_args_include_success_criteria(self, tmp_path):
         from scripts.run_pipeline import build_stage_args, init_pipeline_state

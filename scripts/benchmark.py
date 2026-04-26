@@ -187,9 +187,13 @@ def evaluate_gates(result: BenchmarkResult, args: argparse.Namespace) -> None:
         gates["max_size_mb"] = result.model_size_mb <= args.max_size_mb
     if args.max_latency_ms_p95 is not None:
         gates["max_latency_ms_p95"] = result.latency_ms.get("p95", 0.0) <= args.max_latency_ms_p95
-    if args.min_accuracy is not None and result.accuracy:
-        acc = result.accuracy.get("accuracy") or result.accuracy.get("f1") or 0.0
-        gates["min_accuracy"] = float(acc) >= args.min_accuracy
+    if args.min_accuracy is not None:
+        if result.accuracy:
+            acc = result.accuracy.get("accuracy") or result.accuracy.get("f1") or 0.0
+            gates["min_accuracy"] = float(acc) >= args.min_accuracy
+        else:
+            log.warning("--min-accuracy specified but no accuracy data available; gate fails")
+            gates["min_accuracy"] = False
     result.gate_results = gates
     result.passed = all(gates.values()) if gates else True
 
