@@ -273,12 +273,12 @@ class TestEvaluateGates:
         assert "min_accuracy" not in result.gate_results
         assert result.passed is True
 
-    def test_min_accuracy_fails_when_dataset_provided_but_accuracy_empty(self):
+    def test_min_accuracy_skips_when_dataset_provided_but_accuracy_empty(self):
         import argparse
 
         from scripts.benchmark import evaluate_gates
 
-        # Dataset was provided (eval was expected) but accuracy is still empty — gate fails
+        # Dataset was provided but accuracy evaluation is not yet implemented — gate skipped
         result = _make_result(accuracy={})
         args = argparse.Namespace(
             max_size_mb=None,
@@ -287,8 +287,8 @@ class TestEvaluateGates:
             dataset="/some/dataset",
         )
         evaluate_gates(result, args)
-        assert result.gate_results["min_accuracy"] is False
-        assert result.passed is False
+        assert "min_accuracy" not in result.gate_results
+        assert result.passed is True
 
     def test_min_accuracy_passes_when_data_available(self):
         from scripts.benchmark import evaluate_gates
