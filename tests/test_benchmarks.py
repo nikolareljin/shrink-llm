@@ -105,6 +105,34 @@ class TestLatencyProfiler:
         assert "p95" in result
         assert result["mean"] >= 0
 
+    def test_zero_benchmark_runs_raises(self, monkeypatch, tmp_path):
+        from scripts.benchmark import main
+        import pytest
+
+        model_file = tmp_path / "model.onnx"
+        model_file.write_bytes(b"\x00" * 100)
+        monkeypatch.setattr(
+            "sys.argv",
+            ["benchmark.py", "--model", str(model_file), "--task", "ocr", "--benchmark-runs", "0"],
+        )
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 2
+
+    def test_negative_warmup_runs_raises(self, monkeypatch, tmp_path):
+        from scripts.benchmark import main
+        import pytest
+
+        model_file = tmp_path / "model.onnx"
+        model_file.write_bytes(b"\x00" * 100)
+        monkeypatch.setattr(
+            "sys.argv",
+            ["benchmark.py", "--model", str(model_file), "--task", "ocr", "--warmup-runs", "-1"],
+        )
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 2
+
 
 class TestMainExitCode:
     def test_exits_1_when_gate_fails(self, monkeypatch, tmp_path):
