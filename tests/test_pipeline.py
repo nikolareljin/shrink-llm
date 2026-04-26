@@ -376,6 +376,37 @@ class TestManifestHelpers:
         assert len(result) == 1
         assert result[0]["path"] == "model.onnx"
 
+    def test_collect_new_files_detects_directory_artifact(self, tmp_path):
+        from scripts.run_pipeline import _collect_new_files, _snapshot_dir
+
+        before = _snapshot_dir(tmp_path)
+        pkg = tmp_path / "model.mlpackage"
+        pkg.mkdir()
+        (pkg / "weights.bin").write_bytes(b"\x00" * 1_000_000)
+        (pkg / "metadata.json").write_text("{}")
+
+        result = _collect_new_files(tmp_path, before)
+
+        assert len(result) == 1
+        assert result[0]["path"] == "model.mlpackage"
+        assert result[0]["size_mb"] == pytest.approx(1.0, abs=0.001)
+
+    def test_collect_new_files_lists_files_inside_preexisting_dir(self, tmp_path):
+        from scripts.run_pipeline import _collect_new_files, _snapshot_dir
+
+        # Pre-existing subdir (e.g. benchmarks/) was there before the stage
+        existing_dir = tmp_path / "benchmarks"
+        existing_dir.mkdir()
+        before = _snapshot_dir(tmp_path)
+
+        # Stage adds a file inside it
+        (existing_dir / "result.json").write_bytes(b"{}" * 10)
+
+        result = _collect_new_files(tmp_path, before)
+
+        assert len(result) == 1
+        assert result[0]["path"] == "benchmarks/result.json"
+
     def test_benchmark_stage_args_include_success_criteria(self, tmp_path):
         from scripts.run_pipeline import build_stage_args, init_pipeline_state
 
