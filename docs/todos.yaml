@@ -40,7 +40,7 @@ todos:
     description: |
       Extend scripts/quantize.py to support static INT8 quantization using
       onnxruntime's CalibrationDataReader. Support custom calibration datasets
-      per task (OCR, legal, baby_cry).
+      per task (OCR, legal, audio).
     acceptance_criteria:
       - Static INT8 quantization produces valid ONNX model
       - Calibration dataset loading works for all three tasks
@@ -124,9 +124,9 @@ todos:
     estimate: "3d"
 
   - id: SHRINK-009
-    title: "Download and preprocess baby cry audio datasets"
+    title: "Download and preprocess audio classification datasets"
     description: |
-      Implement datasets/baby_cry/download.py with Donate-a-cry corpus.
+      Implement datasets/audio/download.py with Donate-a-cry corpus.
       Preprocess audio to mel spectrograms and 16kHz mono WAV.
     acceptance_criteria:
       - Donate-a-cry corpus downloaded and labeled

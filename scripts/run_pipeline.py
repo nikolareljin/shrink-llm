@@ -1,15 +1,18 @@
 """
 run_pipeline.py — Orchestrate the full ShrinkLLM compression pipeline from a YAML config.
 
-Runs stages: export → quantize → prune → distill → convert → benchmark
+Runs stages: prune → distill → export → quantize → convert → benchmark
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import subprocess
 import sys
+from collections.abc import Iterable
+from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
@@ -18,15 +21,23 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 log = logging.getLogger(__name__)
 
 VALID_STAGES = [
-    "export",
-    "quantize",
     "prune",
     "distill",
+    "export",
+    "quantize",
     "convert_tflite",
     "convert_coreml",
     "convert_onnx_mobile",
     "benchmark",
 ]
+
+STAGE_PREREQUISITES = {
+    "quantize": {"export"},
+    "convert_tflite": {"export"},
+    "convert_coreml": {"export"},
+    "convert_onnx_mobile": {"export"},
+    "benchmark": {"export"},
+}
 
 
 def run_stage(script: str, args_list: list[str], dry_run: bool = False) -> bool:
@@ -47,12 +58,184 @@ def load_config(config_path: Path) -> dict:
         return yaml.safe_load(f)
 
 
-def build_stage_args(stage: str, config: dict, output_dir: Path) -> list[str]:
+def order_stages(requested_stages: Iterable[str]) -> list[str]:
+    requested = {stage.strip() for stage in requested_stages if stage.strip()}
+    return [stage for stage in VALID_STAGES if stage in requested]
+
+
+_RUNTIME_CONVERT_STAGE = {
+    "tflite": "convert_tflite",
+    "coreml": "convert_coreml",
+    "onnxruntime_mobile": "convert_onnx_mobile",
+}
+
+
+def validate_stage_selection(stages: Iterable[str], config: dict | None = None) -> None:
+    stages = list(stages)
+    selected = set(stages)
+    prerequisites = dict(STAGE_PREREQUISITES)
+    if config is not None:
+        mode, _ = _validated_quantization_settings(config)
+        if mode == "gptq":
+            prerequisites["quantize"] = prerequisites.get("quantize", set()) - {"export"}
+        runtime = (config.get("benchmark") or {}).get("runtime", "onnxruntime")
+        convert_stage = _RUNTIME_CONVERT_STAGE.get(runtime)
+        if convert_stage:
+            prerequisites["benchmark"] = prerequisites.get("benchmark", set()) | {convert_stage}
+    for stage in stages:
+        missing = sorted(prerequisites.get(stage, set()) - selected)
+        if missing:
+            missing_list = ", ".join(missing)
+            raise ValueError(f"Stage '{stage}' requires stage(s): {missing_list}")
+
+
+def _validated_quantization_settings(config: dict) -> tuple[str, str]:
+    q = config.get("quantization")
+    if q is None:
+        q = {}
+    elif not isinstance(q, dict):
+        raise ValueError(
+            "Invalid 'quantization' configuration: expected a mapping/object, "
+            f"got {type(q).__name__}."
+        )
+    precision = str(q.get("precision", "int8")).lower()
+    mode = str(q.get("mode", "dynamic")).lower()
+    supported_modes = {"dynamic", "static", "gptq"}
+    supported_precisions = {"int8", "fp16"}
+    gptq_precisions = {"int4", "int8"}
+
+    if mode not in supported_modes:
+        supported_modes_list = ", ".join(sorted(supported_modes))
+        raise ValueError(
+            f"Unsupported quantization mode '{mode}'. Supported modes: {supported_modes_list}."
+        )
+
+    if mode == "static" and precision == "fp16":
+        raise ValueError(
+            "quantization.mode='static' requires calibration data and only supports int8 precision. "
+            "Use precision='int8' for static quantization, or switch to mode='dynamic' for fp16."
+        )
+
+    if mode == "gptq":
+        if precision not in gptq_precisions:
+            supported_precisions_list = ", ".join(sorted(gptq_precisions))
+            raise ValueError(
+                f"Unsupported precision '{precision}' for mode '{mode}'. "
+                f"Supported precisions for gptq: {supported_precisions_list}."
+            )
+    elif precision not in supported_precisions:
+        supported_precisions_list = ", ".join(sorted(supported_precisions))
+        raise ValueError(
+            f"Unsupported precision '{precision}' for mode '{mode}'. "
+            f"Use one of: {supported_precisions_list}."
+        )
+
+    return mode, precision
+
+
+_ONNX_REQUIRED_STAGES = {
+    "convert_tflite",
+    "convert_coreml",
+    "convert_onnx_mobile",
+    "benchmark",
+}
+
+
+def _quantized_artifact_info(config: dict, output_dir: Path, model_label: str) -> tuple[Path, str]:
+    mode, precision = _validated_quantization_settings(config)
+    if mode == "gptq":
+        artifact_label = f"{model_label}_{precision}_gptq"
+        return output_dir / artifact_label, artifact_label
+    return output_dir / f"{model_label}_{precision}.onnx", f"{model_label}_{precision}"
+
+
+def _validate_gptq_stage_compat(config: dict, stages: list[str]) -> None:
+    mode, _ = _validated_quantization_settings(config)
+    if mode != "gptq":
+        return
+    conflicting = sorted(_ONNX_REQUIRED_STAGES & set(stages))
+    if conflicting:
+        raise ValueError(
+            f"quantization.mode='gptq' produces a directory artifact incompatible with "
+            f"ONNX-dependent stages: {', '.join(conflicting)}. "
+            "Remove those stages or switch to a non-GPTQ quantization mode."
+        )
+
+
+def init_pipeline_state(config: dict, output_dir: Path) -> dict[str, Path | str]:
+    model_id = str(config.get("model", ""))
+    model_label = Path(model_id).name if model_id else "model"
+    onnx_path = output_dir / f"{model_label}_base.onnx"
+    quant_path, quant_label = _quantized_artifact_info(config, output_dir, model_label)
+    return {
+        "model_id": model_id,
+        "model_label": model_label,
+        "onnx_path": onnx_path,
+        "quant_path": quant_path,
+        "quant_label": quant_label,
+        "current_onnx_path": onnx_path,
+        "current_onnx_label": onnx_path.stem,
+    }
+
+
+def _has_model_artifacts(model_dir: Path) -> bool:
+    return any((model_dir / name).exists() for name in ("config.json", "tokenizer_config.json"))
+
+
+def update_pipeline_state(
+    stage: str,
+    state: dict[str, Path | str],
+    config: dict,
+    output_dir: Path,
+    dry_run: bool = False,
+) -> None:
+    if stage == "quantize":
+        state["current_onnx_path"] = state["quant_path"]
+        state["current_onnx_label"] = state["quant_label"]
+        return
+
+    if stage not in {"prune", "distill"}:
+        return
+
+    suffix = "pruned" if stage == "prune" else "distilled"
+    stage_output = output_dir / suffix
+    if stage == "distill" and not dry_run and not _has_model_artifacts(stage_output):
+        log.warning(
+            "Stage '%s' did not produce reusable model artifacts in %s; keeping current model state.",
+            stage,
+            stage_output,
+        )
+        return
+
+    model_label = f"{state['model_label']}_{suffix}"
+    onnx_path = output_dir / f"{model_label}_base.onnx"
+    quant_path, quant_label = _quantized_artifact_info(config, output_dir, model_label)
+    state.update(
+        {
+            "model_id": str(stage_output),
+            "model_label": model_label,
+            "onnx_path": onnx_path,
+            "quant_path": quant_path,
+            "quant_label": quant_label,
+            "current_onnx_path": onnx_path,
+            "current_onnx_label": onnx_path.stem,
+        }
+    )
+
+
+def build_stage_args(
+    stage: str,
+    config: dict,
+    output_dir: Path,
+    state: dict[str, Path | str],
+    dry_run: bool = False,
+) -> list[str]:
     """Build CLI args for each stage from config."""
-    model_id = config.get("model", "")
+    model_id = str(state["model_id"])
     task = config.get("task", "")
-    onnx_path = str(output_dir / f"{Path(model_id).name}_base.onnx")
-    quant_path = str(output_dir / f"{Path(model_id).name}_int8.onnx")
+    onnx_path = str(state["onnx_path"])
+    quant_path = str(state["quant_path"])
+    current_onnx_input = str(state.get("current_onnx_path", state["onnx_path"]))
 
     if stage == "export":
         return [
@@ -66,31 +249,189 @@ def build_stage_args(stage: str, config: dict, output_dir: Path) -> list[str]:
             str(config.get("onnx_opset", 17)),
             "--validate",
         ]
+
     elif stage == "quantize":
-        q = config.get("quantization", {})
+        q = config.get("quantization") or {}
+        mode, precision = _validated_quantization_settings(config)
         args = [
-            "--input",
-            onnx_path,
             "--output",
             quant_path,
             "--precision",
-            q.get("precision", "int8"),
+            precision,
             "--mode",
-            q.get("mode", "dynamic"),
+            mode,
         ]
-        if q.get("calibration_data"):
-            args += ["--calibration-data", q["calibration_data"]]
+        if mode == "gptq":
+            args += ["--model-id", model_id]
+        else:
+            args = ["--input", onnx_path] + args
+        if mode == "static":
+            calibration_data = (
+                q.get("calibration_data")
+                or config.get("benchmark", {}).get("dataset")
+                or f"datasets/{task}"
+            )
+            args += ["--calibration-data", str(calibration_data)]
+        if q.get("calibration_samples"):
+            args += ["--calibration-samples", str(q["calibration_samples"])]
+        skip_ops = q.get("skip_ops")
+        if skip_ops:
+            if isinstance(skip_ops, list):
+                skip_ops = ",".join(str(op) for op in skip_ops)
+            else:
+                skip_ops = str(skip_ops)
+            if skip_ops:
+                args += ["--skip-ops", skip_ops]
         return args
-    elif stage == "benchmark":
-        b = config.get("benchmark", {})
-        result_name = f"{Path(model_id).name}_int8"
+
+    elif stage == "prune":
+        p = config.get("pruning") or {}
         return [
             "--model",
-            quant_path,
+            model_id,
+            "--task",
+            task,
+            "--method",
+            p.get("method", "magnitude"),
+            "--sparsity",
+            str(p.get("sparsity", 0.3)),
+            "--output-dir",
+            str(output_dir / "pruned"),
+            "--finetune-epochs",
+            str(p.get("finetune_epochs", 0)),
+        ]
+
+    elif stage == "distill":
+        d = config.get("distillation") or {}
+        teacher = config.get("teacher", "")
+        if not teacher:
+            log.warning("Distill stage requested but 'teacher' not set in config, skipping")
+            return []
+        if task != "legal":
+            log.warning("Distill stage supports only task='legal', skipping task='%s'", task)
+            return []
+        args = [
+            "--teacher",
+            teacher,
+            "--student",
+            model_id,
+            "--task",
+            task,
+            "--dataset",
+            str(d.get("dataset", "datasets/train")),
+            "--output-dir",
+            str(output_dir / "distilled"),
+            "--temperature",
+            str(d.get("temperature", 6.0)),
+            "--alpha",
+            str(d.get("alpha", 0.1)),
+            "--beta",
+            str(d.get("beta", 0.9)),
+            "--gamma",
+            str(d.get("gamma", 0.1)),
+            "--epochs",
+            str(d.get("epochs", 10)),
+            "--batch-size",
+            str(d.get("batch_size", 16)),
+            "--lr",
+            str(d.get("lr", 5e-5)),
+        ]
+        if d.get("align_hidden"):
+            args.append("--align-hidden")
+        if d.get("fp16"):
+            args.append("--fp16")
+        return args
+
+    elif stage == "convert_tflite":
+        m = config.get("mobile", {}).get("android", {})
+        quantization = m.get("quantization", "int8")
+        representative_dataset = None
+
+        if quantization == "int8":
+            representative_dataset = (
+                m.get("representative_dataset")
+                or config.get("quantization", {}).get("calibration_data")
+                or config.get("benchmark", {}).get("dataset")
+            )
+            if not representative_dataset:
+                log.warning(
+                    "convert_tflite requested quantization='int8' but no representative dataset "
+                    "was configured (checked mobile.android.representative_dataset, "
+                    "quantization.calibration_data, benchmark.dataset). Downgrading to 'fp16'."
+                )
+                quantization = "fp16"
+            elif not dry_run:
+                dataset_path = Path(representative_dataset)
+                if not dataset_path.exists() or not dataset_path.is_dir():
+                    log.warning(
+                        "convert_tflite requested quantization='int8' but representative dataset "
+                        "path '%s' does not exist or is not a directory. Downgrading to 'fp16'.",
+                        dataset_path,
+                    )
+                    representative_dataset = None
+                    quantization = "fp16"
+                elif not any(dataset_path.glob("*.npy")):
+                    log.warning(
+                        "convert_tflite requested quantization='int8' but representative dataset "
+                        "directory '%s' contains no '*.npy' files. Downgrading to 'fp16'.",
+                        dataset_path,
+                    )
+                    representative_dataset = None
+                    quantization = "fp16"
+
+        args = [
+            "--input",
+            current_onnx_input,
+            "--output",
+            str(output_dir / f"{Path(current_onnx_input).stem}.tflite"),
+            "--quantization",
+            quantization,
+        ]
+        if representative_dataset and quantization == "int8":
+            args.extend(["--representative-dataset", str(representative_dataset)])
+        return args
+
+    elif stage == "convert_coreml":
+        m = config.get("mobile", {}).get("ios", {})
+        return [
+            "--input",
+            current_onnx_input,
+            "--output",
+            str(output_dir / f"{Path(current_onnx_input).stem}.mlpackage"),
+            "--minimum-deployment-target",
+            m.get("deployment_target", "iOS16"),
+            "--compute-units",
+            m.get("compute_units", "ALL"),
+            "--quantization",
+            m.get("quantization", "none"),
+        ]
+
+    elif stage == "convert_onnx_mobile":
+        return [
+            "--input",
+            current_onnx_input,
+            "--output",
+            str(output_dir / f"{Path(current_onnx_input).stem}_mobile.onnx"),
+        ]
+
+    elif stage == "benchmark":
+        b = config.get("benchmark", {})
+        runtime = b.get("runtime", "onnxruntime")
+        input_stem = Path(current_onnx_input).stem
+        _runtime_model = {
+            "tflite": str(output_dir / f"{input_stem}.tflite"),
+            "coreml": str(output_dir / f"{input_stem}.mlpackage"),
+            "onnxruntime_mobile": str(output_dir / f"{input_stem}_mobile.onnx"),
+        }
+        benchmark_model = _runtime_model.get(runtime, current_onnx_input)
+        result_name = Path(benchmark_model).stem
+        args = [
+            "--model",
+            benchmark_model,
             "--task",
             task,
             "--runtime",
-            b.get("runtime", "onnxruntime"),
+            runtime,
             "--warmup-runs",
             str(b.get("warmup_runs", 10)),
             "--benchmark-runs",
@@ -100,8 +441,46 @@ def build_stage_args(stage: str, config: dict, output_dir: Path) -> list[str]:
             "--output-md",
             str(output_dir / "benchmarks" / f"{result_name}.md"),
         ]
-    else:
-        return []
+        if b.get("dataset"):
+            args += ["--dataset", b["dataset"]]
+        return args
+
+    return []
+
+
+def _update_manifest(manifest_path: Path, stage: str, args_list: list[str], success: bool) -> None:
+    """Append a stage record to the pipeline manifest JSON."""
+    record: dict = {
+        "stage": stage,
+        "args": args_list,
+        "status": "ok" if success else "failed",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    existing: dict = {"stages": []}
+    if manifest_path.exists():
+        try:
+            loaded = json.loads(manifest_path.read_text())
+            if isinstance(loaded, dict):
+                existing = loaded
+            else:
+                log.warning(
+                    "Manifest %s contained %s JSON, expected object — starting fresh",
+                    manifest_path,
+                    type(loaded).__name__,
+                )
+        except (OSError, json.JSONDecodeError) as exc:
+            log.warning("Could not read manifest %s: %s — starting fresh", manifest_path, exc)
+    stages = existing.get("stages")
+    if not isinstance(stages, list):
+        if "stages" in existing:
+            log.warning(
+                "Manifest %s has non-list 'stages' field (%s) — resetting",
+                manifest_path,
+                type(stages).__name__,
+            )
+        existing["stages"] = []
+    existing["stages"].append(record)
+    manifest_path.write_text(json.dumps(existing, indent=2))
 
 
 def main() -> None:
@@ -119,7 +498,21 @@ def main() -> None:
     args = parser.parse_args()
 
     config = load_config(args.config)
-    stages = [s.strip() for s in args.stages.split(",")]
+    if not isinstance(config, dict):
+        parser.error(f"Config file must be a YAML mapping, got {type(config).__name__}")
+
+    if not config.get("model"):
+        parser.error("Config must specify a non-empty 'model' field")
+    if not config.get("task"):
+        parser.error("Config must specify a non-empty 'task' field")
+
+    requested_stages = [s.strip() for s in args.stages.split(",")]
+    stages = order_stages(requested_stages)
+    try:
+        validate_stage_selection(stages, config)
+        _validate_gptq_stage_compat(config, stages)
+    except ValueError as exc:
+        parser.error(str(exc))
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     log.info("Pipeline config: %s", args.config)
@@ -137,14 +530,24 @@ def main() -> None:
         "benchmark": "benchmark",
     }
 
+    manifest_path = args.output_dir / "manifest.json"
+    state = init_pipeline_state(config, args.output_dir)
     results = {}
+    unknown_stages = [stage for stage in requested_stages if stage and stage not in VALID_STAGES]
+    for stage in unknown_stages:
+        log.warning("Unknown stage '%s' — skipping", stage)
+
     for stage in stages:
-        if stage not in VALID_STAGES:
-            log.warning("Unknown stage '%s' — skipping", stage)
+        stage_args = build_stage_args(stage, config, args.output_dir, state, dry_run=args.dry_run)
+        if not stage_args and stage not in ("export",):
+            log.warning("Stage '%s' produced no args, skipping", stage)
             continue
-        stage_args = build_stage_args(stage, config, args.output_dir)
         success = run_stage(script_map[stage], stage_args, dry_run=args.dry_run)
         results[stage] = "OK" if success else "FAILED"
+        if not args.dry_run:
+            _update_manifest(manifest_path, stage, stage_args, success)
+        if success:
+            update_pipeline_state(stage, state, config, args.output_dir, dry_run=args.dry_run)
         if not success:
             log.error("Pipeline aborted at stage '%s'", stage)
             break
@@ -153,6 +556,9 @@ def main() -> None:
     for stage, status in results.items():
         symbol = "✓" if status == "OK" else "✗"
         log.info("  %s %s: %s", symbol, stage, status)
+
+    if not args.dry_run and manifest_path.exists():
+        log.info("Manifest written to %s", manifest_path)
 
 
 if __name__ == "__main__":

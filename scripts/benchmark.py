@@ -112,7 +112,7 @@ class TFLiteRunner:
 
 
 def get_runner(model_path: str, runtime: str):
-    if runtime == "onnxruntime":
+    if runtime in ("onnxruntime", "onnxruntime_mobile"):
         return ONNXRuntimeRunner(model_path)
     elif runtime == "tflite":
         return TFLiteRunner(model_path)
@@ -130,7 +130,7 @@ def build_dummy_inputs(task: str) -> dict:
             "input_ids": np.random.randint(0, 1000, (1, 128)).astype(np.int64),
             "attention_mask": np.ones((1, 128), dtype=np.int64),
         }
-    elif task == "baby_cry":
+    elif task == "audio":
         return {"input_values": np.random.randn(1, 16000).astype(np.float32)}
     else:
         raise ValueError(f"Unknown task: {task}")
@@ -182,9 +182,11 @@ def main() -> None:
     parser.add_argument(
         "--model", required=True, help="Model file path (.onnx, .tflite, .mlpackage)"
     )
-    parser.add_argument("--task", required=True, choices=["ocr", "legal", "baby_cry"])
+    parser.add_argument("--task", required=True, choices=["ocr", "legal", "audio"])
     parser.add_argument(
-        "--runtime", default="onnxruntime", choices=["onnxruntime", "tflite", "coreml"]
+        "--runtime",
+        default="onnxruntime",
+        choices=["onnxruntime", "onnxruntime_mobile", "tflite", "coreml"],
     )
     parser.add_argument("--dataset", type=Path, help="Evaluation dataset directory")
     parser.add_argument("--warmup-runs", type=int, default=10)

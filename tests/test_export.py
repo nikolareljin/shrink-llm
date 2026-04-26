@@ -23,10 +23,10 @@ class TestBuildDummyInputs:
         assert "attention_mask" in inputs
         assert inputs["input_ids"].shape == (1, 128)
 
-    def test_baby_cry_inputs(self):
+    def test_audio_inputs(self):
         from scripts.export_to_onnx import build_dummy_inputs
 
-        inputs = build_dummy_inputs("baby_cry", "cpu")
+        inputs = build_dummy_inputs("audio", "cpu")
         assert "input_values" in inputs
         assert inputs["input_values"].shape == (1, 16000)
 

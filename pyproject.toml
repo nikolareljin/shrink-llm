@@ -1,10 +1,10 @@
 [build-system]
 requires = ["setuptools>=68", "wheel"]
-build-backend = "setuptools.backends.legacy:build"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "shrink-llm"
-version = "0.1.1"
+version = "0.2.0"
 description = "Compress AI models for efficient smartphone deployment"
 readme = "README.md"
 license = { text = "Apache-2.0" }

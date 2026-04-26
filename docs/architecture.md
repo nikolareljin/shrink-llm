@@ -21,7 +21,7 @@ ShrinkLLM provides a reproducible, modular pipeline to compress any capable mode
 |---|---|---|---|
 | OCR | Extract text from photos of documents, receipts, handwritten notes | ≥ 95% CER | < 200 ms/page |
 | Legal Document Reasoning | Flag risky clauses, summarize contracts, answer legal questions | ≥ 85% F1 | < 2 s/doc |
-| Baby Cry Detection | Classify cry type (hunger, pain, discomfort) from 5-second audio clip | ≥ 90% accuracy | < 100 ms |
+| Audio Classification | Classify cry type (hunger, pain, discomfort) from 1-second audio clip | ≥ 90% accuracy | < 100 ms |
 
 ### Smartphone Hardware Constraints
 
@@ -76,7 +76,7 @@ ShrinkLLM provides a reproducible, modular pipeline to compress any capable mode
 
 **Tradeoffs**: Phi-3-mini at INT4 (~700 MB) achieves ~82% F1 on CUAD legal benchmark vs ~91% for Mistral-7B.
 
-### 2.3 Baby Cry Detection
+### 2.3 Audio Classification
 
 | Role | Model | Size | Why |
 |---|---|---|---|
@@ -126,7 +126,7 @@ shrink-llm/
 │   ├── legal/
 │   │   ├── download.py             # CUAD, ContractNLI
 │   │   └── preprocess.py
-│   └── baby_cry/
+│   └── audio/
 │       ├── download.py             # Donate-a-cry corpus
 │       └── preprocess.py
 │
@@ -163,7 +163,7 @@ shrink-llm/
 ├── configs/
 │   ├── ocr_pipeline.yaml
 │   ├── legal_pipeline.yaml
-│   └── baby_cry_pipeline.yaml
+│   └── audio_pipeline.yaml
 │
 ├── notebooks/
 │   ├── 01_model_exploration.ipynb
@@ -255,7 +255,7 @@ shrink-llm/
 **Goal**: Remove entire attention heads and MLP blocks that contribute least to output quality, reducing computation permanently.
 
 #### C1. Attention Head Pruning
-1. Compute head importance scores (Taylor expansion or gradient × activation magnitude)
+1. Compute head importance scores (average attention weight magnitude across calibration batches)
 2. Rank heads globally across all layers
 3. Zero out bottom-K% heads, retrain for 1–3 epochs
 4. Tools: `nn_pruning`, custom `transformers` hooks
@@ -339,7 +339,7 @@ L_total = α × L_CE(student_logits, labels)         # Hard labels
 ```
 python export_to_onnx.py \
   --model <hf_model_id_or_path> \
-  --task <ocr|legal|baby_cry|classification|seq2seq> \
+  --task <ocr|legal|audio|classification|seq2seq> \
   --output <path/to/output.onnx> \
   --opset 17 \
   --dynamic-axes           # enable variable-length inputs
@@ -390,17 +390,16 @@ python quantize.py \
 ```
 python prune.py \
   --model <hf_model_id_or_path> \
-  --task <ocr|legal|baby_cry> \
+  --task <ocr|legal|audio> \
   --method <attention_heads|mlp|layers|magnitude> \
-  --sparsity 0.3 \                              # fraction to prune
-  --calibration-data <path/> \
+  --sparsity 0.3 \                              # fraction to prune (0–1)
   --output-dir <models/student/pruned/> \
   --finetune-epochs 3 \
   --device <cpu|cuda>
 ```
 
 **Internal modules**:
-- `HeadImportanceScorer` — Taylor/gradient scoring of attention heads
+- `HeadImportanceScorer` — average attention weight scoring of attention heads
 - `MLPPruner` — removes low-activation neurons from FFN layers
 - `LayerDropper` — removes entire transformer layers
 - `PruningTrainer` — short fine-tune loop post-pruning
@@ -416,7 +415,7 @@ python prune.py \
 python distill.py \
   --teacher <hf_model_id_or_path> \
   --student <hf_model_id_or_path> \
-  --task <ocr|legal|baby_cry> \
+  --task <legal> \
   --dataset <path/to/dataset/> \
   --output-dir <models/student/distilled/> \
   --temperature 6.0 \
@@ -445,7 +444,7 @@ python distill.py \
 ```
 python benchmark.py \
   --model <model.onnx|model.tflite|model.mlpackage> \
-  --task <ocr|legal|baby_cry> \
+  --task <ocr|legal|audio> \
   --dataset <path/to/eval_dataset/> \
   --runtime <onnxruntime|tflite|coreml> \
   --device <cpu|gpu|npu> \
@@ -620,7 +619,7 @@ let prediction = try model.prediction(input: modelInput)
 
 ### Metrics
 
-| Metric | OCR | Legal | Baby Cry | How Measured |
+| Metric | OCR | Legal | Audio | How Measured |
 |---|---|---|---|---|
 | Accuracy | CER (↓), WER (↓) | F1 (↑), Exact Match (↑) | Accuracy (↑) | Dataset evaluation |
 | Model Size | MB | MB | MB | `os.path.getsize()` |
@@ -639,8 +638,8 @@ let prediction = try model.prediction(input: modelInput)
 | OCR | IAM Handwriting | 1,539 pages | Academic |
 | Legal | CUAD (Contract Understanding) | 510 contracts | Academic |
 | Legal | ContractNLI | 607 contracts | Academic |
-| Baby Cry | Donate-a-cry corpus | 457 recordings | Open source |
-| Baby Cry | ESC-50 (audio classification) | 2,000 clips | Open source |
+| Audio | Donate-a-cry corpus | 457 recordings | Open source |
+| Audio | ESC-50 (audio classification) | 2,000 clips | Open source |
 
 ### JSON Output Format
 
@@ -740,7 +739,7 @@ Each TODO item follows this machine-readable format to enable automated GitHub i
     per task and allow skipping sensitive ops (softmax, LayerNorm).
   acceptance_criteria:
     - Static INT8 quantization produces valid ONNX model
-    - Calibration dataset loading works for OCR, legal, and baby_cry tasks
+    - Calibration dataset loading works for OCR, legal, and audio tasks
     - Accuracy drop on IIIT-5K ≤ 1% vs FP32 baseline
     - Size reduction ≥ 3.5× vs FP32 input
     - Unit test passes

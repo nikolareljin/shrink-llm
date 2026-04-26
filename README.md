@@ -2,7 +2,7 @@
 
 **Compress capable AI models to run efficiently on smartphones.**
 
-ShrinkLLM is an open-source, end-to-end pipeline for taking production-grade AI models (OCR, legal document reasoning, baby-cry detection, and more) and compressing + adapting them for on-device inference on Android and iOS.
+ShrinkLLM is an open-source, end-to-end pipeline for taking production-grade AI models (OCR, legal document reasoning, audio classification, and more) and compressing + adapting them for on-device inference on Android and iOS.
 
 ---
 
@@ -23,7 +23,7 @@ Modern AI models are too large for smartphones. ShrinkLLM bridges the gap using:
 |---|---|---|---|
 | OCR | TrOCR-Large | TrOCR-Small / MobileViT | < 30 MB |
 | Legal Doc Reasoning | Mistral-7B / Phi-3 | Phi-3-mini / Gemma-2B | < 200 MB (4-bit) |
-| Baby Cry Detection | Wav2Vec2-Large | MobileNet Audio | < 5 MB |
+| Audio Classification | Wav2Vec2-Large | MobileNet Audio | < 5 MB |
 
 ---
 
@@ -121,7 +121,7 @@ shrink-llm/
 ├── datasets/
 │   ├── ocr/
 │   ├── legal/
-│   └── baby_cry/
+│   └── audio/
 ├── mobile_deployment/
 │   ├── android/          # TFLite, ONNX Runtime Mobile
 │   ├── ios/              # CoreML, Metal

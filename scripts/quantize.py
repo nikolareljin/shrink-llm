@@ -153,12 +153,14 @@ def _log_size_comparison(before: Path, after: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Quantize an ONNX model")
-    parser.add_argument("--input", required=True, type=Path, help="Input ONNX model path")
+    parser.add_argument(
+        "--input", type=Path, help="Input ONNX model path (required for non-GPTQ modes)"
+    )
     parser.add_argument("--output", required=True, type=Path, help="Output quantized model path")
     parser.add_argument(
         "--precision",
         default="int8",
-        choices=["int8", "int4", "fp16", "mixed"],
+        choices=["int8", "int4", "fp16"],
         help="Target precision (default: int8)",
     )
     parser.add_argument(
@@ -181,13 +183,27 @@ def main() -> None:
     parser.add_argument("--model-id", help="HuggingFace model ID for GPTQ mode")
     args = parser.parse_args()
 
-    args.output.parent.mkdir(parents=True, exist_ok=True)
+    _valid_precisions = {"dynamic": {"int8", "fp16"}, "static": {"int8"}, "gptq": {"int4", "int8"}}
+    allowed = _valid_precisions.get(args.mode, {"int8", "fp16"})
+    if args.precision not in allowed:
+        parser.error(
+            f"--precision '{args.precision}' is not supported for mode '{args.mode}'. "
+            f"Allowed: {sorted(allowed)}"
+        )
+
+    if args.mode == "gptq":
+        args.output.mkdir(parents=True, exist_ok=True)
+    else:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
     skip_ops = set(args.skip_ops.split(",")) if args.skip_ops else set()
 
     if args.mode == "gptq":
         if not args.model_id:
             parser.error("--model-id is required for GPTQ mode")
-        gptq_quantize(args.model_id, args.output, bits=4)
+        gptq_bits = {"int4": 4, "int8": 8}
+        gptq_quantize(args.model_id, args.output, bits=gptq_bits[args.precision])
+    elif not args.input:
+        parser.error("--input is required for non-GPTQ modes")
     elif args.precision == "fp16":
         fp16_quantize(args.input, args.output)
     elif args.mode == "static":

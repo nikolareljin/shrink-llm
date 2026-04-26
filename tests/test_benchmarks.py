@@ -23,10 +23,10 @@ class TestBuildDummyInputs:
         assert "input_ids" in inputs
         assert "attention_mask" in inputs
 
-    def test_baby_cry(self):
+    def test_audio(self):
         from scripts.benchmark import build_dummy_inputs
 
-        inputs = build_dummy_inputs("baby_cry")
+        inputs = build_dummy_inputs("audio")
         assert "input_values" in inputs
         assert inputs["input_values"].dtype == np.float32
 
