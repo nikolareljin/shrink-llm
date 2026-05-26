@@ -12,49 +12,13 @@ permissions:
   contents: read
 
 jobs:
-  gate:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-          fetch-tags: true
-
-      - name: Check release tag availability
-        shell: bash
-        run: |
-          set -euo pipefail
-          branch="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME:-}}"
-          if [[ ! "$branch" =~ ^release\/v?([0-9]+\.[0-9]+\.[0-9]+(?:-rc\.?[0-9]+)?)$ ]]; then
-            echo "Skipping release tag gate for branch: $branch"
-            exit 0
-          fi
-
-          version="${BASH_REMATCH[1]}"
-          git fetch --tags --prune --force || true
-          if git show-ref --tags -q "refs/tags/$version"; then
-            echo "Tag $version already exists for release branch $branch" >&2
-            exit 1
-          fi
-
-          echo "Tag $version is available for release branch $branch"
-
-      - name: Setup Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-
-      - name: Lint
-        shell: bash
-        run: |
-          set -euo pipefail
-          pip install ruff black
-          ruff check scripts/ compression/ benchmarks/ tests/
-          black --check scripts/ compression/ benchmarks/ tests/
-
-      - name: Test
-        shell: bash
-        run: |
-          set -euo pipefail
-          pip install -e ".[dev]"
-          pytest -q tests/
+  pr-gate:
+    uses: nikolareljin/ci-helpers/.github/workflows/pr-gate.yml@production
+    with:
+      python_version: "3.11"
+      check_release_tag: true
+      release_branch: ${{ github.head_ref }}
+      install_command: "pip install -e '.[dev]'"
+      lint_command: "ruff check scripts/ compression/ benchmarks/ tests/ && black --check scripts/ compression/ benchmarks/ tests/"
+      test_command: "pytest -q tests/"
+      build_command: ""
