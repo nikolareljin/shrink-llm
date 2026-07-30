@@ -24,8 +24,14 @@ Modern AI models are too large for smartphones. ShrinkLLM bridges the gap using:
 | OCR | TrOCR-Large | TrOCR-Small / MobileViT | < 30 MB |
 | Legal Doc Reasoning | Mistral-7B / Phi-3 | Phi-3-mini / Gemma-2B | < 200 MB (4-bit) |
 | Audio Classification | Wav2Vec2-Large | MobileNet Audio | < 5 MB |
+| Text Classification *(planned)* | Phi-3 / Mistral | MobileBERT | < 30 MB |
 
 ---
+
+Text classification is **not supported yet** — `export_to_onnx.py`'s `classification` task is
+*image* classification, and `distill.py` supports causal-LM only. See
+[`docs/text_classification.md`](docs/text_classification.md) for the gap analysis and
+`SHRINK-015`–`SHRINK-018` in [`docs/todos.yaml`](docs/todos.yaml) for the work.
 
 ## Quick Start
 

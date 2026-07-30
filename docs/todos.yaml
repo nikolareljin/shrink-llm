@@ -210,3 +210,101 @@ todos:
     labels: [ci, release, infrastructure]
     milestone: "Phase 6: v1.0 Release"
     estimate: "1d"
+
+  - id: SHRINK-015
+    title: "Add text-classification task to ONNX export"
+    description: |
+      scripts/export_to_onnx.py advertises a 'classification' task that is image
+      classification (AutoModelForImageClassification, pixel_values), so no sequence
+      classifier can be exported. Add a distinct 'text-classification' task that loads
+      AutoModelForSequenceClassification with AutoTokenizer and traces input_ids.
+
+      The first consumer (the downstream consumer) runs tflite_flutter's Interpreter.run, which feeds a
+      single input tensor, and normalises multi-class output by its sum rather than with a
+      softmax. Provide a wrapper that derives attention_mask from input_ids in-graph and
+      applies softmax, exported by default; keep two-input export behind a flag for
+      consumers without that constraint. See docs/text_classification.md.
+    acceptance_criteria:
+      - "--task text-classification exports google/mobilebert-uncased to ONNX opset 17"
+      - "Default export has exactly one input, int32 [1, 256], and one output [1, num_labels]"
+      - "Output rows sum to 1.0 within 1e-5 (softmax applied in-graph)"
+      - "--two-input-export produces input_ids and attention_mask instead"
+      - "Max numerical diff vs the PyTorch model < 1e-4 on sample inputs"
+      - "tests/test_export.py covers both export shapes"
+    dependencies: [SHRINK-001]
+    labels: [pipeline, onnx, text-classification, priority-high, phase-7]
+    milestone: "Phase 7: Text classification"
+    estimate: "2d"
+
+  - id: SHRINK-016
+    title: "Support sequence classification in distillation"
+    description: |
+      distill.py declares SUPPORTED_TASKS = ("legal",) and loads teacher and student as
+      causal LMs. run_pipeline.py logs a warning and skips the distillation stage entirely
+      for any other task, so a text-classification pipeline silently produces an
+      undistilled student.
+
+      The loss machinery already fits: DistillationLoss is CE + KL + optional hidden
+      alignment, which is what sequence-classification distillation needs. Add the task
+      gate, AutoModelForSequenceClassification loaders and a labelled-text dataset adapter.
+      Make run_pipeline fail rather than skip when a configured stage does not support the
+      configured task.
+    acceptance_criteria:
+      - "--task text-classification distils a MobileBERT student from a larger teacher"
+      - "KL is computed over class logits at the configured temperature"
+      - "Hidden-state alignment remains optional and works across differing hidden sizes"
+      - "run_pipeline exits non-zero when a configured stage cannot run the configured task"
+      - "tests/test_distillation.py covers the classification path"
+    dependencies: [SHRINK-015]
+    labels: [distillation, text-classification, priority-high, phase-7]
+    milestone: "Phase 7: Text classification"
+    estimate: "4d"
+
+  - id: SHRINK-017
+    title: "Emit tokenizer and label artifacts beside the model"
+    description: |
+      A compressed classifier is unusable on-device without its tokenizer. Nothing in the
+      pipeline emits one, so each consumer invents a layout and the model and its
+      vocabulary drift apart silently -- a mismatched vocab produces plausible-looking
+      scores rather than an error.
+
+      Add scripts/export_app_artifacts.py writing, beside the model: tokenizer_vocab.txt
+      (HuggingFace vocab.txt verbatim, one token per line, line number is the id),
+      tokenizer_config.json (max_length, unk_token, pad_token, cls_token, sep_token) and
+      <task>_labels.txt (one label per line, index-aligned with the output). Emit a
+      manifest fragment with the sha256 of each so downstream OTA updates can verify that a
+      downloaded model matches the tokenizer already installed.
+    acceptance_criteria:
+      - "Artifacts are produced from any HuggingFace tokenizer directory"
+      - "tokenizer_vocab.txt is byte-identical to the source vocab.txt"
+      - "tokenizer_config.json carries max_length, unk_token, pad_token, cls_token, sep_token"
+      - "Labels are index-aligned with the model config's id2label"
+      - "A JSON fragment with sha256 per artifact is written for the OTA manifest"
+      - "tests cover a tokenizer with and without cls/sep tokens"
+    dependencies: [SHRINK-015]
+    labels: [pipeline, mobile, text-classification, priority-high, phase-7]
+    milestone: "Phase 7: Text classification"
+    estimate: "1d"
+
+  - id: SHRINK-018
+    title: "Add scam classification pipeline config with a precision gate"
+    description: |
+      configs/ has ocr, legal and audio pipelines but nothing for text classification. Add
+      configs/scam_pipeline.yaml: teacher, google/mobilebert-uncased student, int8 dynamic
+      quantization, TFLite mobile target.
+
+      Its success_criteria need one field the existing configs lack: min_precision. The
+      consumer files reports to real authorities against real businesses, so a false
+      positive is far more expensive than a false negative, and an F1 gate hides that
+      asymmetry. run_pipeline must enforce min_precision the way it enforces min_f1.
+    acceptance_criteria:
+      - "configs/scam_pipeline.yaml validates against the pipeline config schema"
+      - "success_criteria supports min_precision and run_pipeline enforces it"
+      - "Targets: min_precision >= 0.97, max_size_mb 30, max_latency_ms 120"
+      - "A run failing the precision gate exits non-zero and does not publish artifacts"
+      - "tests/test_pipeline.py covers the precision gate"
+    dependencies: [SHRINK-015, SHRINK-017]
+    labels: [pipeline, config, text-classification, priority-medium, phase-7]
+    milestone: "Phase 7: Text classification"
+    estimate: "1d"
+
