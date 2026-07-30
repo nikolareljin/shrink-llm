@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- `docs/text_classification.md` — gap analysis for producing text classifiers, driven by the
+  first external consumer (ScamSeal, an on-device scam detector shipping TFLite). Records that
+  `export_to_onnx.py`'s `classification` task is *image* classification, that `distill.py` is
+  gated to `SUPPORTED_TASKS = ("legal",)` while `run_pipeline.py` silently skips the
+  distillation stage for anything else, that nothing emits the tokenizer a compressed
+  classifier needs to be usable on-device, and that no config carries a precision gate.
+- Roadmap Phase 7 and issues `SHRINK-015`–`SHRINK-018` covering that work: text-classification
+  export with a single-input, softmax-in-graph wrapper; sequence-classification distillation;
+  an app-artifact exporter with digests; and `configs/scam_pipeline.yaml` introducing
+  `min_precision` to `success_criteria`.
+
 ## [0.3.0] - 2026-04-25
 
 ### Added

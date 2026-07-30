@@ -71,6 +71,29 @@
 
 ---
 
+## Phase 7: Text classification (unscheduled)
+
+Driven by the first external consumer: [ScamSeal](https://github.com/nikolareljin/scam-seal)
+needs an on-device scam classifier as TFLite. The gap analysis is in
+[`text_classification.md`](text_classification.md); issues are `SHRINK-015` … `SHRINK-018`.
+
+- [ ] Add a `text-classification` task to `export_to_onnx.py` — `AutoModelForSequenceClassification`,
+      `input_ids` tracing, and a single-input wrapper that derives the attention mask and applies
+      softmax in-graph (`SHRINK-015`)
+- [ ] Extend `distill.py` beyond `SUPPORTED_TASKS = ("legal",)` to sequence classification, and
+      stop `run_pipeline.py` silently skipping the distillation stage for unsupported tasks
+      (`SHRINK-016`)
+- [ ] Add `scripts/export_app_artifacts.py` — tokenizer vocab, tokenizer config and labels beside
+      the model, with digests for integrity checking downstream (`SHRINK-017`)
+- [ ] Add `configs/scam_pipeline.yaml`, introducing `min_precision` to `success_criteria`
+      (`SHRINK-018`)
+
+**Exit criteria**: an off-the-shelf MobileBERT goes export → int8 → TFLite → artifacts and loads
+on-device, at ≤ 30 MB with a single `int32 [1, 256]` input. Distillation quality targets follow
+once that path exists.
+
+---
+
 ## Future Phases
 
 - **v1.1**: Add support for more tasks (sentiment analysis, image segmentation)
