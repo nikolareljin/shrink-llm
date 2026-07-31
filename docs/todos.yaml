@@ -227,6 +227,7 @@ todos:
     acceptance_criteria:
       - "--task text-classification exports google/mobilebert-uncased to ONNX opset 17"
       - "Default export has exactly one input, int32 [1, 256], and one output [1, num_labels]"
+      - "The traced dummy input is dtype=torch.int32 -- torch.onnx.export records the dtype it traces and torch.randint defaults to int64"
       - "Output rows sum to 1.0 within 1e-5 (softmax applied in-graph)"
       - "--two-input-export produces input_ids and attention_mask instead"
       - "Max numerical diff vs the PyTorch model < 1e-4 on sample inputs"
@@ -241,16 +242,19 @@ todos:
     description: |
       distill.py declares SUPPORTED_TASKS = ("legal",) and loads teacher and student as
       causal LMs. run_pipeline.py logs a warning and skips the distillation stage entirely
-      for any other task, so a text-classification pipeline silently produces an
-      undistilled student.
+      for any other task, so a text-classification pipeline produces an undistilled student.
 
       The loss machinery already fits: DistillationLoss is CE + KL + optional hidden
       alignment, which is what sequence-classification distillation needs. Add the task
       gate, AutoModelForSequenceClassification loaders and a labelled-text dataset adapter.
       Make run_pipeline fail rather than skip when a configured stage does not support the
-      configured task.
+      configured task -- it currently records the skip but still exits zero.
+
+      The teacher must itself be a sequence classifier (DeBERTa-v3-base, BERT-Large). A
+      causal-LM teacher has no class logits to match: it emits a distribution over its
+      vocabulary, so there is no KL against a two-class student head.
     acceptance_criteria:
-      - "--task text-classification distils a MobileBERT student from a larger teacher"
+      - "--task text-classification distils a MobileBERT student from a larger sequence-classifier teacher"
       - "KL is computed over class logits at the configured temperature"
       - "Hidden-state alignment remains optional and works across differing hidden sizes"
       - "run_pipeline exits non-zero when a configured stage cannot run the configured task"
@@ -270,14 +274,21 @@ todos:
 
       Add scripts/export_app_artifacts.py writing, beside the model: tokenizer_vocab.txt
       (HuggingFace vocab.txt verbatim, one token per line, line number is the id),
-      tokenizer_config.json (max_length, unk_token, pad_token, cls_token, sep_token) and
+      tokenizer_meta.json (max_length, unk_token, pad_token, cls_token, sep_token) and
       <task>_labels.txt (one label per line, index-aligned with the output). Emit a
       manifest fragment with the sha256 of each so downstream OTA updates can verify that a
       downloaded model matches the tokenizer already installed.
+
+      The metadata file must NOT be called tokenizer_config.json. That is already a
+      HuggingFace filename carrying a different and much larger schema, and putting one
+      beside a verbatim vocab.txt yields a directory that looks like a tokenizer directory
+      and is not one -- AutoTokenizer.from_pretrained then either fails confusingly or
+      builds a tokenizer from a partial config, which is the drift this task exists to stop.
     acceptance_criteria:
       - "Artifacts are produced from any HuggingFace tokenizer directory"
       - "tokenizer_vocab.txt is byte-identical to the source vocab.txt"
-      - "tokenizer_config.json carries max_length, unk_token, pad_token, cls_token, sep_token"
+      - "tokenizer_meta.json carries max_length, unk_token, pad_token, cls_token, sep_token"
+      - "No emitted filename collides with a HuggingFace tokenizer filename"
       - "Labels are index-aligned with the model config's id2label"
       - "A JSON fragment with sha256 per artifact is written for the OTA manifest"
       - "tests cover a tokenizer with and without cls/sep tokens"
@@ -296,15 +307,78 @@ todos:
       Its success_criteria need one field the existing configs lack: min_precision. The
       consumer files reports to real authorities against real businesses, so a false
       positive is far more expensive than a false negative, and an F1 gate hides that
-      asymmetry. run_pipeline must enforce min_precision the way it enforces min_f1.
+      asymmetry.
+
+      Adding the key is not enough. No accuracy-family criterion is enforced end to end
+      today: run_pipeline classifies min_f1, max_cer and max_accuracy_drop_pct as
+      recognised-but-unwired, and benchmark.py has no F1 or precision gate to receive them
+      (min_accuracy is the exception -- benchmark.py implements the gate and run_pipeline
+      now passes it). min_precision therefore needs a --min-precision gate in benchmark.py,
+      a precision computation to feed it, and the run_pipeline wiring -- otherwise it joins
+      min_f1: 0.80 in legal_pipeline.yaml, which has never been checked.
     acceptance_criteria:
       - "configs/scam_pipeline.yaml validates against the pipeline config schema"
-      - "success_criteria supports min_precision and run_pipeline enforces it"
+      - "benchmark.py grows a --min-precision gate and computes precision from the eval dataset"
+      - "run_pipeline passes success_criteria.min_precision through to that flag, and min_precision is not left in _known_unimplemented"
       - "Targets: min_precision >= 0.97, max_size_mb 30, max_latency_ms 120"
       - "A run failing the precision gate exits non-zero and does not publish artifacts"
-      - "tests/test_pipeline.py covers the precision gate"
-    dependencies: [SHRINK-015, SHRINK-017]
+      - "tests/test_pipeline.py covers the precision gate, including that a configured threshold reaches benchmark.py"
+    dependencies: [SHRINK-015, SHRINK-017, SHRINK-019]
     labels: [pipeline, config, text-classification, priority-medium, phase-7]
     milestone: "Phase 7: Text classification"
     estimate: "1d"
+
+  - id: SHRINK-019
+    title: "Add the text-classification task to the benchmark stage"
+    description: |
+      scripts/benchmark.py declares --task with choices ["ocr", "legal", "audio"] and has
+      build_dummy_inputs branches for exactly those three, while run_pipeline.py passes the
+      config's task straight through to that flag.
+
+      So the export -> quantize -> convert path in docs/text_classification.md is one stage
+      short of where a pipeline run actually ends: a task: text-classification config clears
+      four stages and then dies at the fifth on "argument --task: invalid choice". Add the
+      task and a matching input_ids dummy-input branch, mirroring the exporter.
+
+      This is the same defect the image-classification task already has -- export_to_onnx.py
+      accepts 'classification' and benchmark.py does not -- so add both branches and a test
+      asserting the two task lists agree, to stop a third instance appearing.
+    acceptance_criteria:
+      - "benchmark.py --task accepts text-classification and builds an int32 input_ids dummy input"
+      - "run_pipeline.py --stages export,quantize,convert_tflite,benchmark completes for a text-classification config"
+      - "A test asserts every task export_to_onnx.py accepts is also accepted by benchmark.py"
+      - "tests/test_benchmarks.py covers the new task"
+    dependencies: [SHRINK-015]
+    labels: [pipeline, benchmark, text-classification, priority-high, phase-7]
+    milestone: "Phase 7: Text classification"
+    estimate: "1d"
+
+  - id: SHRINK-020
+    title: "Restore CoreML conversion behind a supported front end"
+    description: |
+      scripts/convert_to_coreml.py called ct.convert(onnx_model, ...). coremltools removed
+      ONNX as an input format in 6.0 and this project requires >=7.2, so the call failed with
+      "Unable to determine the type of the model ... from one of [tensorflow, pytorch,
+      milinternal]". The whole convert_coreml stage has never worked on a supported
+      coremltools version.
+
+      It now raises NotImplementedError with that explanation instead of surfacing
+      coremltools' generic error several frames down, and the shipped configs omit the stage.
+      Restoring it needs a real source model: either keep the PyTorch student around and
+      convert the TorchScript trace, or add an ONNX -> MIL front end.
+
+      _convert_via_coremltools() in that module already holds the working post-conversion
+      path (compute precision, weight quantization, deployment target, compute units), so
+      this task only has to supply the source model and re-enable the entry point.
+    acceptance_criteria:
+      - "A TrOCR-size student converts to .mlpackage without the caller writing conversion code"
+      - "--quantization fp16 uses ct.convert(compute_precision=FLOAT16), not a linear quantizer dtype"
+      - "--quantization int8 either succeeds or fails loudly; no silent pass-through of an unquantized model"
+      - "An unknown --minimum-deployment-target or --compute-units is rejected, not silently defaulted"
+      - "convert_coreml is restored to the stages list in configs/ocr_pipeline.yaml and configs/audio_pipeline.yaml"
+      - "tests cover the conversion path with a small traced module"
+    dependencies: []
+    labels: [pipeline, coreml, mobile, priority-medium]
+    milestone: "Phase 4: Mobile Deployment"
+    estimate: "3d"
 
