@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import pytest
 
-from tests.conftest import REPO_ROOT
-
 
 class TestDatasetsIsNotAPackage:
     """The repo's datasets/ directory holds data, not code.
@@ -16,8 +14,8 @@ class TestDatasetsIsNotAPackage:
     `scripts/<name>.py`. `import datasets` then returned an empty stub with no load_dataset.
     """
 
-    def test_datasets_dir_has_no_init(self):
-        assert not (REPO_ROOT / "datasets" / "__init__.py").exists(), (
+    def test_datasets_dir_has_no_init(self, repo_root):
+        assert not (repo_root / "datasets" / "__init__.py").exists(), (
             "datasets/__init__.py makes the data directory a package that shadows the "
             "HuggingFace `datasets` dependency."
         )
@@ -35,11 +33,11 @@ class TestDatasetsIsNotAPackage:
 
 
 class TestDeclaredDependencies:
-    def test_every_declared_package_dir_exists(self, pyproject):
+    def test_every_declared_package_dir_exists(self, pyproject, repo_root):
         include = pyproject["tool"]["setuptools"]["packages"]["find"]["include"]
         for entry in include:
             name = entry.rstrip("*")
-            assert (REPO_ROOT / name).is_dir(), f"packaged directory {name!r} does not exist"
+            assert (repo_root / name).is_dir(), f"packaged directory {name!r} does not exist"
 
     def test_tflite_extra_uses_the_converter_the_code_prefers(self, pyproject):
         """convert_to_tflite.py tries onnx2tf first; onnx-tf 1.10 requires tensorflow-addons,
@@ -60,13 +58,13 @@ class TestDeclaredDependencies:
 
 
 class TestLintCoversPackagedCode:
-    def test_ci_lints_every_packaged_directory(self, pyproject):
+    def test_ci_lints_every_packaged_directory(self, pyproject, repo_root):
         """A packaged directory that CI never lints accumulates unchecked code."""
         include = pyproject["tool"]["setuptools"]["packages"]["find"]["include"]
         packaged = {entry.rstrip("*") for entry in include}
 
         for workflow in ("ci.yml", "pr-gate.yml"):
-            content = (REPO_ROOT / ".github" / "workflows" / workflow).read_text()
+            content = (repo_root / ".github" / "workflows" / workflow).read_text()
             lint_lines = [ln for ln in content.splitlines() if "ruff check" in ln]
             assert lint_lines, f"{workflow} has no ruff invocation"
             covered = " ".join(lint_lines)

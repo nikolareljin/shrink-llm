@@ -74,16 +74,28 @@ class LatencyProfiler:
 
 
 class MemoryProfiler:
+    """Process memory readings from /proc. Returns 0.0 on platforms without it."""
+
+    @staticmethod
+    def available() -> bool:
+        """Whether /proc/self/status can be read on this platform."""
+        return Path("/proc/self/status").exists()
+
     @staticmethod
     def _status_field_mb(field: str) -> float:
-        """Read one kB-valued field from /proc/self/status, in MB."""
+        """Read one kB-valued field from /proc/self/status, in MB.
+
+        OSError covers a platform without /proc; ValueError and IndexError cover a line whose
+        shape is not "Field:\tN kB". Memory reporting is diagnostic, so a surprise here degrades
+        to 0.0 rather than aborting a benchmark that has otherwise succeeded.
+        """
         try:
             with open("/proc/self/status") as f:
                 for line in f:
                     if line.startswith(f"{field}:"):
                         return int(line.split()[1]) / 1024
-        except OSError:
-            pass
+        except (OSError, ValueError, IndexError):
+            log.debug("Could not read %s from /proc/self/status", field, exc_info=True)
         return 0.0
 
     @classmethod

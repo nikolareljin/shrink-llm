@@ -132,16 +132,39 @@ class TestMemoryProfiler:
     def test_current_and_peak_are_distinct_readings(self):
         from scripts.benchmark import MemoryProfiler
 
+        if not MemoryProfiler.available():
+            pytest.skip("/proc/self/status is Linux-only")
+
         current = MemoryProfiler.current_rss_mb()
         peak = MemoryProfiler.peak_rss_mb()
 
         assert current > 0
         assert peak >= current, f"peak {peak} should never be below current {current}"
 
-    def test_unknown_field_returns_zero_rather_than_raising(self):
+    def test_returns_zero_on_a_platform_without_proc(self):
         from scripts.benchmark import MemoryProfiler
 
         assert MemoryProfiler._status_field_mb("NoSuchField") == 0.0
+
+    def test_a_malformed_line_degrades_instead_of_raising(self, tmp_path, monkeypatch):
+        """Memory reporting is diagnostic; it must not abort an otherwise successful run."""
+        import builtins
+
+        import scripts.benchmark as benchmark
+
+        bad = tmp_path / "status"
+        bad.write_text("VmRSS:\tnot-a-number kB\n")
+
+        real_open = builtins.open
+
+        def fake_open(path, *args, **kwargs):
+            if str(path) == "/proc/self/status":
+                return real_open(bad, *args, **kwargs)
+            return real_open(path, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "open", fake_open)
+
+        assert benchmark.MemoryProfiler.current_rss_mb() == 0.0
 
     def test_baseline_is_sampled_before_the_runner_is_built(self):
         """Otherwise model_load_delta measures an inference, not the model load."""
@@ -150,10 +173,15 @@ class TestMemoryProfiler:
         import scripts.benchmark as benchmark
 
         source = inspect.getsource(benchmark.main)
+        baseline_at = source.find("rss_baseline = ")
+        runner_at = source.find("runner = get_runner(")
 
-        assert source.index("rss_baseline = ") < source.index(
-            "runner = get_runner("
-        ), "the baseline must be sampled before the model is loaded"
+        assert baseline_at != -1, "main() no longer samples an rss_baseline"
+        assert runner_at != -1, "main() no longer builds the runner via get_runner"
+        assert baseline_at < runner_at, (
+            "the baseline must be sampled before the model is loaded, or model_load_delta "
+            "measures an inference rather than the load"
+        )
 
 
 class TestRunIdClock:
