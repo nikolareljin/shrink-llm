@@ -33,6 +33,30 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- **The test suite could not run on Python 3.10**, which `requires-python = ">=3.10"` allows and
+  which CI now exercises. Two test modules imported `tomllib`, stdlib only from 3.11, so the 3.10
+  leg would have failed at collection time rather than on one test. Parsing moved to a
+  `tests/conftest.py` fixture that falls back to `tomli`, now declared in the `dev` extra under a
+  `python_version < "3.11"` marker. The fixture also resolves `pyproject.toml` from the repo root
+  instead of the working directory.
+- `convert_to_coreml.py` imported `coremltools` before raising its "ONNX input is not supported"
+  error, purely to name the version. Without the optional `coreml` extra installed — the common
+  case — that surfaced as "install coremltools", sending the user to install a package that
+  cannot do the job. The explanation is now unconditional.
+- `convert_to_tflite.py` read only the keyword half of a SavedModel's
+  `structured_input_signature`. A signature exposing its inputs positionally yielded an empty
+  input list, and the representative-dataset generator then fed TFLite nothing while reporting
+  success. It now falls back to the positional structure and raises when neither is present.
+- `convert_to_tflite.py`'s `ImportError` guard wrapped the `onnx2tf.convert()` call as well as
+  the import, so an `ImportError` raised *inside* onnx2tf — a missing TensorFlow, say — was
+  reported as "onnx2tf not installed" and the real cause discarded.
+- `benchmark.py` reported `VmRSS` as peak memory. Peak RSS is `VmHWM`; `VmRSS` is current
+  residency. Both memory samples were also taken *after* the model was loaded and the full
+  benchmark loop had run, so `rss_after_load` measured neither, and `rss_delta` measured one
+  extra inference rather than the model load. The reported fields are now `rss_baseline`,
+  `rss_after_load`, `model_load_delta` and `peak_rss`, each sampled where its name implies.
+- `benchmark.py` built `run_id` from naive local time while `timestamp` used UTC — two clocks in
+  one record.
 - **`quantize.py` crashed on every invocation.** Both `quantize_dynamic` and `quantize_static`
   were called with `optimize_model=True`, which is not a parameter of either on any onnxruntime
   in range of the declared `>=1.18.0` floor — every dynamic and static quantization run raised
