@@ -118,6 +118,56 @@ class TestMarkdownGeneration:
         assert "93.7%" in content
 
 
+class TestMemoryProfiler:
+    """The reported fields must measure what their names claim."""
+
+    def test_peak_reads_the_high_water_mark_not_current_rss(self):
+        import inspect
+
+        from scripts.benchmark import MemoryProfiler
+
+        source = inspect.getsource(MemoryProfiler.peak_rss_mb)
+        assert "VmHWM" in source, "peak RSS is VmHWM; VmRSS is current residency"
+
+    def test_current_and_peak_are_distinct_readings(self):
+        from scripts.benchmark import MemoryProfiler
+
+        current = MemoryProfiler.current_rss_mb()
+        peak = MemoryProfiler.peak_rss_mb()
+
+        assert current > 0
+        assert peak >= current, f"peak {peak} should never be below current {current}"
+
+    def test_unknown_field_returns_zero_rather_than_raising(self):
+        from scripts.benchmark import MemoryProfiler
+
+        assert MemoryProfiler._status_field_mb("NoSuchField") == 0.0
+
+    def test_baseline_is_sampled_before_the_runner_is_built(self):
+        """Otherwise model_load_delta measures an inference, not the model load."""
+        import inspect
+
+        import scripts.benchmark as benchmark
+
+        source = inspect.getsource(benchmark.main)
+
+        assert source.index("rss_baseline = ") < source.index(
+            "runner = get_runner("
+        ), "the baseline must be sampled before the model is loaded"
+
+
+class TestRunIdClock:
+    def test_run_id_uses_utc_like_the_timestamp_field(self):
+        """run_id was naive local time while timestamp was UTC -- two clocks in one record."""
+        import inspect
+
+        import scripts.benchmark as benchmark
+
+        source = inspect.getsource(benchmark.main)
+        start = source.index("run_id = ")
+        assert "timezone.utc" in source[start : start + 200]
+
+
 class TestLatencyProfiler:
     def test_profiles_correctly(self):
         from scripts.benchmark import LatencyProfiler

@@ -20,26 +20,36 @@ log = logging.getLogger(__name__)
 
 def convert_onnx_to_tf(onnx_path: Path, tf_saved_model_dir: Path) -> None:
     """Convert ONNX to TensorFlow SavedModel using onnx2tf."""
+    # Only the import is guarded. Wrapping the conversion call too would swallow an ImportError
+    # raised *inside* onnx2tf -- a missing TensorFlow, say -- and then report "install onnx2tf"
+    # when onnx2tf is installed and the real cause was something else.
     try:
         import onnx2tf
+    except ImportError:
+        onnx2tf = None
 
+    if onnx2tf is not None:
         log.info("Converting ONNX → TF SavedModel via onnx2tf...")
         onnx2tf.convert(
             input_onnx_file_path=str(onnx_path),
             output_folder_path=str(tf_saved_model_dir),
             non_verbose=False,
         )
-    except ImportError:
-        log.warning("onnx2tf not installed. Trying onnx-tf...")
+    else:
+        log.warning("onnx2tf not installed. Trying the deprecated onnx-tf fallback...")
         try:
             import onnx
             from onnx_tf.backend import prepare
+        except ImportError as exc:
+            raise ImportError(
+                'Install the tflite extra: pip install -e ".[tflite]". onnx-tf is not a '
+                "supported alternative -- its last release requires tensorflow-addons, "
+                "archived in May 2024 and capped at TensorFlow 2.14."
+            ) from exc
 
-            model = onnx.load(str(onnx_path))
-            tf_rep = prepare(model)
-            tf_rep.export_graph(str(tf_saved_model_dir))
-        except ImportError:
-            raise ImportError("Install onnx2tf: pip install onnx2tf")
+        model = onnx.load(str(onnx_path))
+        tf_rep = prepare(model)
+        tf_rep.export_graph(str(tf_saved_model_dir))
 
     log.info("TF SavedModel saved to %s", tf_saved_model_dir)
 
@@ -54,8 +64,24 @@ def _saved_model_input_names(tf_saved_model_dir: Path) -> list[str]:
 
     loaded = tf.saved_model.load(str(tf_saved_model_dir))
     signature = loaded.signatures["serving_default"]
-    _args, kwargs = signature.structured_input_signature
-    return list(kwargs)
+    args, kwargs = signature.structured_input_signature
+
+    if kwargs:
+        return list(kwargs)
+
+    # A signature may expose its inputs positionally instead. Reading only kwargs would return
+    # an empty list here, and the generator would then feed TFLite nothing at all while
+    # reporting success.
+    positional = [
+        spec.name for spec in tf.nest.flatten(args) if getattr(spec, "name", None) is not None
+    ]
+    if positional:
+        return positional
+
+    raise ValueError(
+        f"The SavedModel at {tf_saved_model_dir} exposes no named inputs on its "
+        "'serving_default' signature, so calibration samples cannot be matched to inputs."
+    )
 
 
 def _representative_dataset_gen(dataset_dir: Path, input_names: list[str]):
