@@ -57,6 +57,53 @@ class TestDeclaredDependencies:
         assert 'python_version < "3.11"' in dev, "tomli must carry a version marker"
 
 
+class TestDocumentationMatchesReality:
+    """Documented commands and layouts that silently drift from the code.
+
+    The contributing guide previously told contributors to lint a narrower tree than CI does,
+    so they passed locally and failed the gate -- exactly the failure the CI change closed.
+    """
+
+    def test_contributing_lint_command_matches_ci(self, repo_root, pyproject):
+        contributing = (repo_root / "docs" / "contributing.md").read_text()
+        packaged = {
+            entry.rstrip("*")
+            for entry in pyproject["tool"]["setuptools"]["packages"]["find"]["include"]
+        }
+
+        lint_lines = [ln for ln in contributing.splitlines() if "ruff check" in ln]
+        assert lint_lines, "contributing.md documents no ruff command"
+        covered = " ".join(lint_lines)
+
+        missing = sorted(d for d in packaged if f"{d}/" not in covered)
+        assert not missing, (
+            f"docs/contributing.md lints a narrower tree than CI; missing: {missing}. "
+            "A contributor following it passes locally and fails the gate."
+        )
+
+    def test_documented_python_versions_match_the_ci_matrix(self, repo_root):
+        ci = (repo_root / ".github" / "workflows" / "ci.yml").read_text()
+        contributing = (repo_root / "docs" / "contributing.md").read_text()
+
+        for version in ("3.10", "3.11", "3.12"):
+            assert version in ci, f"CI no longer covers {version}"
+            assert (
+                version in contributing
+            ), f"docs/contributing.md does not mention {version}, which CI runs"
+
+    def test_architecture_does_not_prescribe_a_datasets_package(self, repo_root):
+        """The blueprint used to prescribe datasets/__init__.py -- the shadowing defect."""
+        architecture = (repo_root / "docs" / "architecture.md").read_text()
+        structure = architecture[
+            architecture.index("## 3. REPOSITORY STRUCTURE") : architecture.index(
+                "## 4. FULL COMPRESSION PIPELINE"
+            )
+        ]
+
+        assert "datasets/\n│   ├── __init__.py" not in structure
+        assert "not a Python package" in structure or "must not contain" in structure
+
+
 class TestLintCoversPackagedCode:
     def test_ci_lints_every_packaged_directory(self, pyproject, repo_root):
         """A packaged directory that CI never lints accumulates unchecked code."""
