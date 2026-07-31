@@ -35,6 +35,11 @@ class DistillationConfig:
     beta: float = 0.9  # Weight for soft label (KL) loss
     gamma: float = 0.1  # Weight for hidden state alignment loss
     align_hidden: bool = False  # Whether to align intermediate representations
+    # Causal LMs predict token t+1 from position t, so their hard-label CE needs the
+    # labels shifted one step left. HuggingFace models do this internally when you pass
+    # labels=, but this loss is computed by hand, so it has to do it here. Left off by
+    # default because sequence and token classification must NOT shift.
+    shift_labels: bool = False
 
 
 class DistillationLoss(nn.Module):
@@ -54,15 +59,28 @@ class DistillationLoss(nn.Module):
     ) -> dict[str, torch.Tensor]:
         temperature = self.config.temperature
 
-        # Hard label loss (cross-entropy against ground truth)
+        # Hard label loss (cross-entropy against ground truth).
+        # For causal LMs the logits at position t predict token t+1, so drop the last
+        # position and the first label before comparing them.
+        ce_logits, ce_labels = student_logits, labels
+        if self.config.shift_labels and student_logits.dim() == 3:
+            ce_logits = student_logits[:, :-1, :]
+            ce_labels = labels[:, 1:]
+        # .reshape rather than .view: the slices above are not contiguous.
         loss_ce = functional.cross_entropy(
-            student_logits.view(-1, student_logits.size(-1)),
-            labels.view(-1),
+            ce_logits.reshape(-1, ce_logits.size(-1)),
+            ce_labels.reshape(-1),
         )
 
-        # Soft label loss (KL divergence against teacher soft targets)
-        student_log_probs = functional.log_softmax(student_logits / temperature, dim=-1)
-        teacher_probs = functional.softmax(teacher_logits / temperature, dim=-1)
+        # Soft label loss (KL divergence against teacher soft targets).
+        # Flatten to 2-D first: kl_div's "batchmean" divides by input.size(0), which on
+        # [B, T, V] is B — that would make loss_kl a per-sequence mean while loss_ce is a
+        # per-token mean, scaling the two against each other by the sequence length and
+        # making alpha/beta depend on max_length.
+        student_flat = student_logits.reshape(-1, student_logits.size(-1))
+        teacher_flat = teacher_logits.reshape(-1, teacher_logits.size(-1))
+        student_log_probs = functional.log_softmax(student_flat / temperature, dim=-1)
+        teacher_probs = functional.softmax(teacher_flat / temperature, dim=-1)
         loss_kl = functional.kl_div(student_log_probs, teacher_probs, reduction="batchmean") * (
             temperature**2
         )
@@ -202,6 +220,8 @@ def main() -> None:
         beta=args.beta,
         gamma=args.gamma,
         align_hidden=args.align_hidden,
+        # Every task in SUPPORTED_TASKS is causal-LM today.
+        shift_labels=True,
     )
 
     _training_args = TrainingArguments(
@@ -214,7 +234,8 @@ def main() -> None:
         lr_scheduler_type="cosine",
         logging_steps=50,
         save_strategy="epoch",
-        evaluation_strategy="epoch",
+        # Renamed from evaluation_strategy in transformers 4.41 and removed in 4.46.
+        eval_strategy="epoch",
         load_best_model_at_end=True,
         report_to="none",
     )
