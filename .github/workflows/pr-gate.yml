@@ -19,6 +19,6 @@ jobs:
       check_release_tag: true
       release_branch: ${{ github.head_ref }}
       install_command: "pip install -e '.[dev]'"
-      lint_command: "ruff check scripts/ compression/ benchmarks/ tests/ && black --check scripts/ compression/ benchmarks/ tests/"
+      lint_command: "ruff check scripts/ compression/ benchmarks/ mobile_deployment/ tests/ && black --check scripts/ compression/ benchmarks/ mobile_deployment/ tests/"
       test_command: "pytest -q tests/"
       build_command: ""
