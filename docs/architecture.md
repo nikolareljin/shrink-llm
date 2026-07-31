@@ -19,7 +19,7 @@ ShrinkLLM provides a reproducible, modular pipeline to compress any capable mode
 
 | Use Case | Description | Accuracy Target | Latency Target |
 |---|---|---|---|
-| OCR | Extract text from photos of documents, receipts, handwritten notes | ≥ 95% CER | < 200 ms/page |
+| OCR | Extract text from photos of documents, receipts, handwritten notes | ≤ 5% CER | < 200 ms/page |
 | Legal Document Reasoning | Flag risky clauses, summarize contracts, answer legal questions | ≥ 85% F1 | < 2 s/doc |
 | Audio Classification | Classify cry type (hunger, pain, discomfort) from 1-second audio clip | ≥ 90% accuracy | < 100 ms |
 
@@ -92,98 +92,71 @@ ShrinkLLM provides a reproducible, modular pipeline to compress any capable mode
 
 ## 3. REPOSITORY STRUCTURE
 
+> **Status note.** This section previously described a layout that was never built: 17 of the 32
+> modules it listed do not exist, and every responsibility they named lives in `scripts/`
+> instead. It now describes what is actually present, and marks the rest as intended rather than
+> current. The distinction matters — a contributor hunting a pruning bug in
+> `compression/pruning/magnitude_pruner.py` would have found an empty package while the defect
+> sat in `scripts/prune.py`.
+
+### 3.1 What exists today
+
 ```
 shrink-llm/
-├── models/
-│   ├── teacher/                    # Downloaded/cached teacher models
-│   │   └── .gitkeep
-│   └── student/                    # Output compressed models
-│       └── .gitkeep
-│
-├── compression/
-│   ├── __init__.py
-│   ├── quantization/
-│   │   ├── __init__.py
-│   │   ├── onnx_quantizer.py       # ONNX quantization (onnxruntime)
-│   │   ├── torch_quantizer.py      # PyTorch static/dynamic quant
-│   │   └── gptq_quantizer.py       # GPTQ 4-bit for LLMs
-│   ├── pruning/
-│   │   ├── __init__.py
-│   │   ├── attention_pruner.py     # Head importance + removal
-│   │   ├── mlp_pruner.py           # FFN block pruning
-│   │   └── magnitude_pruner.py     # Weight magnitude pruning
-│   └── distillation/
-│       ├── __init__.py
-│       ├── trainer.py              # KD training loop
-│       ├── losses.py               # KL divergence, MSE, cosine losses
-│       └── callbacks.py            # Checkpointing, early stopping
-│
-├── datasets/
-│   ├── __init__.py
-│   ├── ocr/
-│   │   ├── download.py             # IIIT-5k, IAM, FUNSD downloaders
-│   │   └── preprocess.py
-│   ├── legal/
-│   │   ├── download.py             # CUAD, ContractNLI
-│   │   └── preprocess.py
-│   └── audio/
-│       ├── download.py             # Donate-a-cry corpus
-│       └── preprocess.py
-│
-├── mobile_deployment/
-│   ├── android/
-│   │   ├── tflite_packager.py      # TFLite model packaging
-│   │   ├── onnx_mobile_packager.py
-│   │   └── README.md
-│   ├── ios/
-│   │   ├── coreml_packager.py      # CoreML .mlpackage builder
-│   │   └── README.md
-│   └── onnx_mobile/
-│       ├── optimizer.py            # ONNX graph optimizations
-│       └── README.md
-│
-├── scripts/
-│   ├── export_to_onnx.py
-│   ├── quantize.py
-│   ├── prune.py
-│   ├── distill.py
-│   ├── benchmark.py
+├── scripts/                        # All pipeline logic currently lives here
+│   ├── export_to_onnx.py           # ONNX export per task
+│   ├── quantize.py                 # dynamic / static INT8, FP16, GPTQ
+│   ├── prune.py                    # attention-head, MLP, layer, magnitude pruning
+│   ├── distill.py                  # distillation losses and trainer
+│   ├── benchmark.py                # latency, memory, size, gates
 │   ├── convert_to_tflite.py
-│   ├── convert_to_coreml.py
+│   ├── convert_to_coreml.py        # raises: see SHRINK-020
 │   ├── convert_to_onnx_mobile.py
-│   └── run_pipeline.py             # Orchestrates full pipeline
+│   └── run_pipeline.py             # orchestrates the stages from a YAML config
 │
-├── benchmarks/
-│   ├── runner.py                   # Device + accuracy benchmarks
-│   ├── metrics.py                  # CER, F1, accuracy, latency
-│   ├── datasets/                   # Small eval subsets
+├── compression/                    # Packaged; being filled by Phase 7
+│   ├── __init__.py
+│   ├── quantization/__init__.py    # empty
+│   ├── pruning/__init__.py         # empty
+│   └── distillation/__init__.py    # empty
+│
+├── benchmarks/                     # Packaged; empty but for output directories
+│   ├── __init__.py
+│   ├── datasets/                   # small eval subsets
 │   └── results/                    # JSON + Markdown outputs
-│       └── .gitkeep
+│
+├── mobile_deployment/              # Packaged; empty
+│   ├── __init__.py
+│   ├── android/__init__.py
+│   ├── ios/__init__.py
+│   └── onnx_mobile/__init__.py
+│
+├── datasets/                       # DATA ONLY -- deliberately not a Python package
+│   ├── README.md
+│   ├── ocr/ legal/ audio/
 │
 ├── configs/
 │   ├── ocr_pipeline.yaml
 │   ├── legal_pipeline.yaml
 │   └── audio_pipeline.yaml
 │
-├── notebooks/
-│   ├── 01_model_exploration.ipynb
-│   ├── 02_compression_analysis.ipynb
-│   └── 03_benchmark_visualization.ipynb
+├── models/
+│   ├── teacher/                    # cached teacher models
+│   └── student/                    # pipeline output, including benchmarks/ and manifest.json
 │
 ├── tests/
-│   ├── test_quantization.py
-│   ├── test_pruning.py
-│   ├── test_distillation.py
-│   ├── test_export.py
-│   └── test_benchmarks.py
+│   ├── conftest.py                 # shared fixtures (pyproject, repo_root)
+│   ├── test_quantization.py  test_pruning.py    test_distillation.py
+│   ├── test_export.py        test_benchmarks.py test_pipeline.py
+│   └── test_packaging.py     test_converters.py
 │
 ├── docs/
 │   ├── architecture.md             # This file
-│   ├── compression_pipeline.md
-│   ├── mobile_deployment.md
-│   ├── benchmarking.md
-│   ├── roadmap.md
-│   └── contributing.md
+│   ├── compression_pipeline.md     mobile_deployment.md   benchmarking.md
+│   ├── roadmap.md                  contributing.md        text_classification.md
+│   ├── todos.yaml
+│   ├── reviews/                    # review findings
+│   └── superpowers/                # design specs and implementation plans
 │
 ├── pyproject.toml
 ├── AGENTS.md
@@ -192,7 +165,46 @@ shrink-llm/
 └── .gitignore
 ```
 
----
+**`datasets/` must not contain an `__init__.py`.** An earlier version of this document
+prescribed one, together with `datasets/<task>/download.py` and `preprocess.py`. That makes the
+directory a regular package on the repository root's `sys.path` entry, which shadows the
+HuggingFace `datasets` dependency for anything run from the repository root — and that is exactly
+where `run_pipeline.py` invokes every stage. `import datasets` then returns an empty stub with no
+`load_dataset`. `tests/test_packaging.py::test_datasets_dir_has_no_init` guards against
+reintroducing it.
+
+### 3.2 Where new library code goes
+
+Phase 7 (`SHRINK-015` … `SHRINK-019`) begins moving reusable logic out of `scripts/` and into
+`compression/`, leaving the scripts as thin CLI orchestration:
+
+```
+compression/
+├── data/                           # dataset loading (JSONL files and hub ids)
+│   ├── sources.py
+│   ├── text_classification.py
+│   └── causal_lm.py
+├── metrics.py                      # accuracy, precision, recall, F1
+├── evaluation.py                   # runtime-agnostic predict loop
+└── artifacts.py                    # the versioned app artifact bundle contract
+```
+
+This supersedes the earlier plan to put metrics in `benchmarks/metrics.py` and the evaluation
+loop in `benchmarks/runner.py`: the modules live beside the compression code that consumes them,
+and `benchmarks/` remains the home for benchmark *outputs*. See
+`docs/superpowers/specs/2026-07-30-text-classification-design.md`.
+
+### 3.3 Not built
+
+Described by earlier revisions of this document and never implemented. Listed so the gap is
+explicit rather than implied:
+
+- `compression/quantization/{onnx,torch,gptq}_quantizer.py` — in `scripts/quantize.py`
+- `compression/pruning/{attention,mlp,magnitude}_pruner.py` — in `scripts/prune.py`
+- `compression/distillation/{trainer,losses,callbacks}.py` — in `scripts/distill.py`
+- `datasets/<task>/{download,preprocess}.py` — no dataset tooling exists
+- `mobile_deployment/**/*_packager.py`, `optimizer.py` — in the `scripts/convert_to_*.py` family
+- `notebooks/*.ipynb` — the directory is empty
 
 ## 4. FULL COMPRESSION PIPELINE
 
