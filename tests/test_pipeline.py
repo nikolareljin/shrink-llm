@@ -5,6 +5,14 @@ from __future__ import annotations
 import pytest
 
 
+class _ConfigError(Exception):
+    """Stands in for argparse's parser.error, which exits rather than raising."""
+
+
+def _fail(message: str):
+    raise _ConfigError(message)
+
+
 def _base_config() -> dict:
     return {
         "model": "org/demo-model",
@@ -553,28 +561,40 @@ class TestManifestHelpers:
         assert "--max-size-mb" not in args
         assert any("success_criteria" in r.message for r in caplog.records)
 
-    def test_benchmark_stage_args_does_not_inject_min_accuracy_until_implemented(
-        self, tmp_path, caplog
-    ):
+    def test_benchmark_stage_args_wires_min_accuracy(self, tmp_path):
+        """benchmark.py implements --min-accuracy; a configured threshold must reach it."""
+        from scripts.run_pipeline import build_stage_args, init_pipeline_state
+
+        config = _base_config()
+        config["success_criteria"] = {"min_accuracy": 0.85}
+        state = init_pipeline_state(config, tmp_path)
+
+        args = build_stage_args("benchmark", config, tmp_path, state)
+
+        assert "--min-accuracy" in args
+        assert args[args.index("--min-accuracy") + 1] == "0.85"
+
+    def test_benchmark_stage_args_warns_loudly_about_unenforced_criteria(self, tmp_path, caplog):
+        """An unenforced threshold must be visible at the default INFO level.
+
+        This previously logged at DEBUG, so a config carrying min_f1 produced a green run
+        with nothing anywhere saying the gate had not been evaluated.
+        """
         import logging
 
         from scripts.run_pipeline import build_stage_args, init_pipeline_state
 
         config = _base_config()
-        config["success_criteria"] = {"min_f1": 0.80, "min_accuracy": 0.85}
+        config["success_criteria"] = {"min_f1": 0.80}
         state = init_pipeline_state(config, tmp_path)
 
-        with caplog.at_level(logging.DEBUG, logger="scripts.run_pipeline"):
+        with caplog.at_level(logging.WARNING, logger="scripts.run_pipeline"):
             args = build_stage_args("benchmark", config, tmp_path, state)
 
-        # Accuracy gates not yet wired — must not appear in CLI args
-        assert "--min-accuracy" not in args
-        # Known-unimplemented keys must NOT produce WARNING records
-        assert not any(
-            "min_f1" in r.message or "min_accuracy" in r.message
-            for r in caplog.records
-            if r.levelno >= logging.WARNING
-        )
+        assert "--min-f1" not in args
+        warnings = [r.message for r in caplog.records if r.levelno >= logging.WARNING]
+        assert any("min_f1" in m for m in warnings), warnings
+        assert any("NOT be enforced" in m for m in warnings), warnings
 
     def test_benchmark_stage_args_warns_on_truly_unknown_criteria(self, tmp_path, caplog):
         import logging
@@ -590,31 +610,164 @@ class TestManifestHelpers:
 
         assert any("totally_unknown_key" in r.message for r in caplog.records)
 
-    def test_benchmark_stage_args_only_debugs_known_unimplemented_criteria(self, tmp_path, caplog):
+    def test_every_unenforced_criterion_is_named_in_a_warning(self, tmp_path, caplog):
         import logging
 
         from scripts.run_pipeline import build_stage_args, init_pipeline_state
 
+        unenforced = ("max_cer", "max_accuracy_drop_pct", "min_f1")
         config = _base_config()
         config["success_criteria"] = {
             "max_cer": 0.05,
             "max_accuracy_drop_pct": 5,
-            "min_accuracy": 0.9,
             "min_f1": 0.8,
+            # Enforced — must not be reported as unenforced.
+            "min_accuracy": 0.9,
         }
         state = init_pipeline_state(config, tmp_path)
 
         with caplog.at_level(logging.WARNING, logger="scripts.run_pipeline"):
             build_stage_args("benchmark", config, tmp_path, state)
 
-        # Known-unimplemented keys must NOT produce WARNING records
-        assert not any(
-            any(
-                k in r.message
-                for k in ("max_cer", "max_accuracy_drop_pct", "min_accuracy", "min_f1")
-            )
-            for r in caplog.records
+        warnings = [r.message for r in caplog.records if r.levelno >= logging.WARNING]
+        for key in unenforced:
+            assert any(key in m for m in warnings), f"{key} not warned about: {warnings}"
+        assert not any("min_accuracy" in m for m in warnings), warnings
+
+    def test_config_stages_are_used_when_cli_omits_them(self):
+        from scripts.run_pipeline import resolve_requested_stages
+
+        config = _base_config()
+        config["stages"] = ["prune", "distill", "quantize"]
+
+        assert resolve_requested_stages(None, config, _fail) == ["prune", "distill", "quantize"]
+
+    def test_cli_stages_override_the_config(self):
+        from scripts.run_pipeline import resolve_requested_stages
+
+        config = _base_config()
+        config["stages"] = ["prune"]
+
+        assert resolve_requested_stages("export,quantize", config, _fail) == ["export", "quantize"]
+
+    def test_defaults_to_every_stage_without_a_config_list(self):
+        from scripts.run_pipeline import VALID_STAGES, resolve_requested_stages
+
+        assert resolve_requested_stages(None, _base_config(), _fail) == list(VALID_STAGES)
+
+    def test_accepts_a_comma_separated_config_string(self):
+        from scripts.run_pipeline import resolve_requested_stages
+
+        config = _base_config()
+        config["stages"] = "prune, quantize"
+
+        assert resolve_requested_stages(None, config, _fail) == ["prune", "quantize"]
+
+    def test_rejects_a_malformed_config_stages_value(self):
+        from scripts.run_pipeline import resolve_requested_stages
+
+        config = _base_config()
+        config["stages"] = {"prune": True}
+
+        with pytest.raises(_ConfigError, match="must be a list"):
+            resolve_requested_stages(None, config, _fail)
+
+    def test_rejects_an_empty_config_stages_list(self):
+        from scripts.run_pipeline import resolve_requested_stages
+
+        config = _base_config()
+        config["stages"] = []
+
+        with pytest.raises(_ConfigError, match="empty"):
+            resolve_requested_stages(None, config, _fail)
+
+    def test_update_manifest_records_a_skipped_stage(self, tmp_path):
+        """A requested stage that never ran belongs in the run's artifact record.
+
+        The main loop used to `continue` before both results[stage] and _update_manifest,
+        so a skipped stage left no trace in the summary or the manifest — the run looked
+        like it had never asked for that stage at all.
+        """
+        import json
+
+        from scripts.run_pipeline import _update_manifest
+
+        path = tmp_path / "manifest.json"
+        _update_manifest(
+            path,
+            "distill",
+            [],
+            False,
+            status="skipped",
+            error={"message": "Stage 'distill' was requested but produced no arguments"},
         )
+
+        rec = json.loads(path.read_text())["stages"][0]
+        assert rec["stage"] == "distill"
+        assert rec["status"] == "skipped"
+        assert rec["exit_code"] is None
+        assert "requested" in rec["error"]["message"]
+
+    def test_update_manifest_still_rejects_a_failure_without_an_exit_code(self, tmp_path):
+        """The skipped path must not weaken the failed-stage invariant."""
+        from scripts.run_pipeline import _update_manifest
+
+        with pytest.raises(ValueError):
+            _update_manifest(tmp_path / "manifest.json", "quantize", [], False)
+
+    def test_shipped_configs_resolve_to_a_valid_stage_selection(self):
+        """Every config in configs/ must be runnable with no --stages argument.
+
+        legal_pipeline.yaml selects GPTQ, whose directory artifact the ONNX-consuming stages
+        cannot read — so with an unconditional "default to all stages" it aborted on a config
+        error before doing any work.
+        """
+        from pathlib import Path
+
+        import yaml
+
+        from scripts.run_pipeline import (
+            _validate_gptq_stage_compat,
+            order_stages,
+            resolve_requested_stages,
+            validate_stage_selection,
+        )
+
+        configs = sorted(Path("configs").glob("*.yaml"))
+        assert configs, "no configs found"
+
+        for config_path in configs:
+            config = yaml.safe_load(config_path.read_text())
+            stages = order_stages(resolve_requested_stages(None, config, _fail))
+            validate_stage_selection(stages, config)
+            _validate_gptq_stage_compat(config, stages)
+
+    def test_shipped_configs_build_args_for_every_selected_stage(self, tmp_path):
+        """Catches config values a stage's CLI would reject, e.g. an unsupported
+        mobile.android.quantization reaching convert_to_tflite.py --quantization."""
+        from pathlib import Path
+
+        import yaml
+
+        from scripts.run_pipeline import (
+            build_stage_args,
+            init_pipeline_state,
+            order_stages,
+            resolve_requested_stages,
+        )
+
+        tflite_choices = {"none", "fp16", "int8"}
+        for config_path in sorted(Path("configs").glob("*.yaml")):
+            config = yaml.safe_load(config_path.read_text())
+            state = init_pipeline_state(config, tmp_path)
+            for stage in order_stages(resolve_requested_stages(None, config, _fail)):
+                args = build_stage_args(stage, config, tmp_path, state, dry_run=True)
+                if stage == "convert_tflite" and "--quantization" in args:
+                    value = args[args.index("--quantization") + 1]
+                    assert value in tflite_choices, (
+                        f"{config_path.name}: convert_to_tflite.py --quantization rejects "
+                        f"{value!r}; choices are {sorted(tflite_choices)}"
+                    )
 
     def test_init_manifest_run_id_has_millisecond_precision(self, tmp_path):
         import json

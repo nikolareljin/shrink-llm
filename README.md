@@ -24,15 +24,24 @@ Modern AI models are too large for smartphones. ShrinkLLM bridges the gap using:
 | OCR | TrOCR-Large | TrOCR-Small / MobileViT | < 30 MB |
 | Legal Doc Reasoning | Mistral-7B / Phi-3 | Phi-3-mini / Gemma-2B | < 200 MB (4-bit) |
 | Audio Classification | Wav2Vec2-Large | MobileNet Audio | < 5 MB |
+| Text Classification *(planned)* | DeBERTa-v3-base / BERT-Large | MobileBERT | < 30 MB |
 
 ---
+
+Text classification is **not supported yet** — `export_to_onnx.py`'s `classification` task is
+*image* classification, and `distill.py` supports causal-LM only. See
+[`docs/text_classification.md`](docs/text_classification.md) for the gap analysis and
+`SHRINK-015`–`SHRINK-019` in [`docs/todos.yaml`](docs/todos.yaml) for the work.
+
+Its teacher is a sequence classifier rather than a causal LM on purpose: distillation matches
+teacher and student **class** logits, and a causal LM emits a distribution over its vocabulary
+instead — there is no KL between the two.
 
 ## Quick Start
 
 ```bash
 git clone https://github.com/nikolareljin/shrink-llm.git
 cd shrink-llm
-git submodule update --init --recursive
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 
@@ -49,7 +58,6 @@ python scripts/benchmark.py --model models/student/trocr_int8.onnx --task ocr --
 ## Development Setup
 
 ```bash
-git submodule update --init --recursive
 python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
@@ -57,9 +65,11 @@ pip install -e ".[dev]"
 
 Baseline requirements:
 
-- Python 3.10 or newer for local development.
-- Initialize `scripts/script-helpers` after cloning so shared shell helpers are available.
+- Python 3.10, 3.11 or 3.12 — all three are exercised in CI.
 - Keep model weights, raw datasets, and mobile build outputs outside git-tracked source paths.
+- The `scripts/script-helpers` submodule is declared in `.gitmodules` but currently unused —
+  the repository contains no shell scripts. Initializing it is optional:
+  `git submodule update --init --recursive`.
 
 Optional extras:
 
@@ -82,17 +92,22 @@ python scripts/run_pipeline.py --config configs/ocr_pipeline.yaml --dry-run
 
 ## Pipeline Overview
 
+Stages run in the order `run_pipeline.py` defines them — pruning and distillation act on the
+PyTorch model, *before* it is exported and quantized:
+
 ```
-Teacher Model
-     │
-     ▼
-ONNX Export ──► Quantization (INT8/INT4) ──► Pruning ──► Distillation ──► Fine-tune
-                                                                              │
-                                                              ┌───────────────┤
-                                                              ▼               ▼
-                                                         TFLite           CoreML
-                                                        (Android)          (iOS)
+Teacher Model ──┐
+                ▼
+Student ──► Prune ──► Distill ──► ONNX Export ──► Quantize (INT8/INT4) ──► Benchmark
+                                                       │
+                                       ┌───────────────┼───────────────┐
+                                       ▼               ▼               ▼
+                                    TFLite          CoreML       ORT Mobile
+                                   (Android)         (iOS)        (either)
 ```
+
+Pick a subset with `--stages`, or list one in the config's `stages:` key. A config's own list is
+the default when `--stages` is not given.
 
 ---
 

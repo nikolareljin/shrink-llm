@@ -3,7 +3,6 @@
 ## Local setup
 
 ```bash
-git submodule update --init --recursive
 python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
@@ -11,9 +10,13 @@ pip install -e ".[dev]"
 
 Expected environment:
 
-- Python 3.10+ locally. CI runs on Python 3.11, so use 3.11 when you want the closest match.
-- A checked-out `scripts/script-helpers` submodule before running shell helpers or CI-like workflows.
+- Python 3.10, 3.11 or 3.12. CI runs all three, so any of them is a fair match. Note that the
+  test suite parses `pyproject.toml`, and `tomllib` is stdlib only from 3.11 — the `dev` extra
+  supplies `tomli` below that.
 - Large models and datasets stored outside the tracked repository tree unless a placeholder file is required.
+- The `scripts/script-helpers` submodule is declared in `.gitmodules` but currently unused: the
+  repository contains no shell scripts. Initializing it is optional —
+  `git submodule update --init --recursive`.
 
 Optional extras:
 
@@ -25,10 +28,13 @@ pip install -e ".[dev,gptq,audio]"
 
 ## Common commands
 
+These must stay identical to CI's. Linting a narrower tree than CI does means passing locally and
+failing the gate.
+
 ```bash
 pytest -q
-ruff check scripts/ compression/ benchmarks/ tests/
-black --check scripts/ compression/ benchmarks/ tests/
+ruff check scripts/ compression/ benchmarks/ mobile_deployment/ tests/
+black --check scripts/ compression/ benchmarks/ mobile_deployment/ tests/
 python scripts/run_pipeline.py --config configs/ocr_pipeline.yaml --dry-run
 ```
 
@@ -37,7 +43,6 @@ Bootstrap after cloning:
 ```bash
 git clone https://github.com/nikolareljin/shrink-llm.git
 cd shrink-llm
-git submodule update --init --recursive
 python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"

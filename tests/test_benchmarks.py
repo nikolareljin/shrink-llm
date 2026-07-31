@@ -30,11 +30,42 @@ class TestBuildDummyInputs:
         assert "input_values" in inputs
         assert inputs["input_values"].dtype == np.float32
 
+    def test_classification(self):
+        from scripts.benchmark import build_dummy_inputs
+
+        inputs = build_dummy_inputs("classification")
+        assert "pixel_values" in inputs
+        assert inputs["pixel_values"].shape == (1, 3, 224, 224)
+
     def test_unknown_task_raises(self):
         from scripts.benchmark import build_dummy_inputs
 
         with pytest.raises(ValueError):
             build_dummy_inputs("invalid_task")
+
+
+class TestTaskParityWithExporter:
+    """run_pipeline.py passes the config's task straight to both scripts.
+
+    A task the exporter accepts and the benchmark does not fails a pipeline run at its
+    last stage, after every expensive stage has already succeeded.
+    """
+
+    def test_benchmark_accepts_every_exporter_task(self):
+        from scripts.benchmark import SUPPORTED_TASKS
+        from scripts.export_to_onnx import TASK_CONFIGS
+
+        missing = sorted(set(TASK_CONFIGS) - set(SUPPORTED_TASKS))
+        assert not missing, (
+            f"benchmark.py rejects task(s) export_to_onnx.py accepts: {missing}. "
+            "A pipeline configured for one of these dies at the benchmark stage."
+        )
+
+    def test_every_benchmark_task_has_dummy_inputs(self):
+        from scripts.benchmark import SUPPORTED_TASKS, build_dummy_inputs
+
+        for task in SUPPORTED_TASKS:
+            assert build_dummy_inputs(task), f"no dummy inputs for accepted task {task!r}"
 
 
 class TestBenchmarkResult:
@@ -85,6 +116,84 @@ class TestMarkdownGeneration:
         assert "trocr_int8" in content
         assert "Latency" in content
         assert "93.7%" in content
+
+
+class TestMemoryProfiler:
+    """The reported fields must measure what their names claim."""
+
+    def test_peak_reads_the_high_water_mark_not_current_rss(self):
+        import inspect
+
+        from scripts.benchmark import MemoryProfiler
+
+        source = inspect.getsource(MemoryProfiler.peak_rss_mb)
+        assert "VmHWM" in source, "peak RSS is VmHWM; VmRSS is current residency"
+
+    def test_current_and_peak_are_distinct_readings(self):
+        from scripts.benchmark import MemoryProfiler
+
+        if not MemoryProfiler.available():
+            pytest.skip("/proc/self/status is Linux-only")
+
+        current = MemoryProfiler.current_rss_mb()
+        peak = MemoryProfiler.peak_rss_mb()
+
+        assert current > 0
+        assert peak >= current, f"peak {peak} should never be below current {current}"
+
+    def test_returns_zero_on_a_platform_without_proc(self):
+        from scripts.benchmark import MemoryProfiler
+
+        assert MemoryProfiler._status_field_mb("NoSuchField") == 0.0
+
+    def test_a_malformed_line_degrades_instead_of_raising(self, tmp_path, monkeypatch):
+        """Memory reporting is diagnostic; it must not abort an otherwise successful run."""
+        import builtins
+
+        import scripts.benchmark as benchmark
+
+        bad = tmp_path / "status"
+        bad.write_text("VmRSS:\tnot-a-number kB\n")
+
+        real_open = builtins.open
+
+        def fake_open(path, *args, **kwargs):
+            if str(path) == "/proc/self/status":
+                return real_open(bad, *args, **kwargs)
+            return real_open(path, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "open", fake_open)
+
+        assert benchmark.MemoryProfiler.current_rss_mb() == 0.0
+
+    def test_baseline_is_sampled_before_the_runner_is_built(self):
+        """Otherwise model_load_delta measures an inference, not the model load."""
+        import inspect
+
+        import scripts.benchmark as benchmark
+
+        source = inspect.getsource(benchmark.main)
+        baseline_at = source.find("rss_baseline = ")
+        runner_at = source.find("runner = get_runner(")
+
+        assert baseline_at != -1, "main() no longer samples an rss_baseline"
+        assert runner_at != -1, "main() no longer builds the runner via get_runner"
+        assert baseline_at < runner_at, (
+            "the baseline must be sampled before the model is loaded, or model_load_delta "
+            "measures an inference rather than the load"
+        )
+
+
+class TestRunIdClock:
+    def test_run_id_uses_utc_like_the_timestamp_field(self):
+        """run_id was naive local time while timestamp was UTC -- two clocks in one record."""
+        import inspect
+
+        import scripts.benchmark as benchmark
+
+        source = inspect.getsource(benchmark.main)
+        start = source.index("run_id = ")
+        assert "timezone.utc" in source[start : start + 200]
 
 
 class TestLatencyProfiler:

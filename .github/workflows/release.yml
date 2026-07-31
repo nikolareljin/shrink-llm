@@ -31,8 +31,22 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          pip install tomllib 2>/dev/null || true
+          # tomllib is stdlib from 3.11; the setup-python step above pins 3.11.
           VERSION=$(python -c "import tomllib; d=tomllib.load(open('pyproject.toml','rb')); print(d['project']['version'])")
           echo "Releasing v${VERSION}"
-          git tag "v${VERSION}" || echo "Tag already exists"
-          git push origin "v${VERSION}" || echo "Tag already pushed"
+
+          # Treat "already released" as success and everything else as failure. The previous
+          # `|| echo` swallowed auth errors, protected-ref rejections and network failures
+          # alike, so a release that tagged nothing still reported a green job.
+          if git rev-parse -q --verify "refs/tags/v${VERSION}" >/dev/null; then
+            echo "Tag v${VERSION} already exists locally — nothing to do."
+            exit 0
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/v${VERSION}" >/dev/null 2>&1; then
+            echo "Tag v${VERSION} already exists on origin — nothing to do."
+            exit 0
+          fi
+
+          git tag "v${VERSION}"
+          git push origin "v${VERSION}"
+          echo "Pushed tag v${VERSION}"

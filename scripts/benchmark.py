@@ -74,17 +74,43 @@ class LatencyProfiler:
 
 
 class MemoryProfiler:
+    """Process memory readings from /proc. Returns 0.0 on platforms without it."""
+
     @staticmethod
-    def peak_rss_mb() -> float:
-        """Read peak RSS from /proc/self/status on Linux."""
+    def available() -> bool:
+        """Whether /proc/self/status can be read on this platform."""
+        return Path("/proc/self/status").exists()
+
+    @staticmethod
+    def _status_field_mb(field: str) -> float:
+        """Read one kB-valued field from /proc/self/status, in MB.
+
+        OSError covers a platform without /proc; ValueError and IndexError cover a line whose
+        shape is not "Field:\tN kB". Memory reporting is diagnostic, so a surprise here degrades
+        to 0.0 rather than aborting a benchmark that has otherwise succeeded.
+        """
         try:
             with open("/proc/self/status") as f:
                 for line in f:
-                    if line.startswith("VmRSS:"):
+                    if line.startswith(f"{field}:"):
                         return int(line.split()[1]) / 1024
-        except Exception:
-            pass
+        except (OSError, ValueError, IndexError):
+            log.debug("Could not read %s from /proc/self/status", field, exc_info=True)
         return 0.0
+
+    @classmethod
+    def current_rss_mb(cls) -> float:
+        """Resident set size right now."""
+        return cls._status_field_mb("VmRSS")
+
+    @classmethod
+    def peak_rss_mb(cls) -> float:
+        """High-water-mark RSS for the process.
+
+        VmHWM, not VmRSS: this used to read VmRSS, which is *current* residency, so the value
+        reported as peak was whatever happened to be resident at the sampling instant.
+        """
+        return cls._status_field_mb("VmHWM")
 
 
 class ONNXRuntimeRunner:
@@ -128,6 +154,15 @@ def get_runner(model_path: str, runtime: str):
         raise ValueError(f"Unknown runtime: {runtime}")
 
 
+#: Tasks this script can benchmark.
+#:
+#: Must stay a superset of export_to_onnx.py's TASK_CONFIGS: run_pipeline.py passes the
+#: config's task straight through to both scripts, so a task the exporter accepts and this
+#: one does not fails a whole run at its last stage, after every expensive stage has
+#: already succeeded. tests/test_benchmarks.py asserts the parity.
+SUPPORTED_TASKS = ("ocr", "legal", "audio", "classification")
+
+
 def build_dummy_inputs(task: str) -> dict:
     if task == "ocr":
         return {"pixel_values": np.random.randn(1, 3, 384, 384).astype(np.float32)}
@@ -138,6 +173,9 @@ def build_dummy_inputs(task: str) -> dict:
         }
     elif task == "audio":
         return {"input_values": np.random.randn(1, 16000).astype(np.float32)}
+    elif task == "classification":
+        # Mirrors export_to_onnx.py's image-classification dummy input.
+        return {"pixel_values": np.random.randn(1, 3, 224, 224).astype(np.float32)}
     else:
         raise ValueError(f"Unknown task: {task}")
 
@@ -243,7 +281,7 @@ def main() -> None:
     parser.add_argument(
         "--model", required=True, help="Model file path (.onnx, .tflite, .mlpackage)"
     )
-    parser.add_argument("--task", required=True, choices=["ocr", "legal", "audio"])
+    parser.add_argument("--task", required=True, choices=list(SUPPORTED_TASKS))
     parser.add_argument(
         "--runtime",
         default="onnxruntime",
@@ -286,21 +324,30 @@ def main() -> None:
         )
     else:
         model_size_mb_raw = os.path.getsize(model_path) / 1e6
-    run_id = f"{args.task}_{Path(model_path).stem}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    # UTC, matching the record's own timestamp field and run_pipeline's manifest run ids.
+    # datetime.now() here was naive local time, so a run_id and its timestamp could disagree.
+    run_id = (
+        f"{args.task}_{Path(model_path).stem}_"
+        f"{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
+    )
 
     log.info("Model: %s (%.1f MB)", model_path, model_size_mb_raw)
 
+    # Baseline before the model is loaded. Previously both samples were taken *after* loading
+    # and after the whole benchmark loop, so "rss_after_load" was measured long after load and
+    # "rss_delta" measured one extra inference rather than the cost of loading the model.
+    rss_baseline = MemoryProfiler.current_rss_mb()
+
     runner = get_runner(model_path, args.runtime)
     dummy_inputs = build_dummy_inputs(args.task)
+    rss_after_load = MemoryProfiler.current_rss_mb()
 
     profiler = LatencyProfiler(warmup_runs=args.warmup_runs, benchmark_runs=args.benchmark_runs)
     latency_raw = profiler.profile(runner, dummy_inputs)
     latency = {k: round(v, 2) for k, v in latency_raw.items()}
     log.info("Latency: mean=%.1f ms, p95=%.1f ms", latency["mean"], latency["p95"])
 
-    mem_before = MemoryProfiler.peak_rss_mb()
-    runner(dummy_inputs)
-    mem_after = MemoryProfiler.peak_rss_mb()
+    peak_rss = MemoryProfiler.peak_rss_mb()
 
     size_reduction = None
     if args.teacher_size_mb:
@@ -319,8 +366,10 @@ def main() -> None:
         latency_ms=latency,
         latency_ms_raw=latency_raw,
         memory_mb={
-            "rss_after_load": round(mem_after, 1),
-            "rss_delta": round(mem_after - mem_before, 1),
+            "rss_baseline": round(rss_baseline, 1),
+            "rss_after_load": round(rss_after_load, 1),
+            "model_load_delta": round(rss_after_load - rss_baseline, 1),
+            "peak_rss": round(peak_rss, 1),
         },
         size_reduction_pct=size_reduction,
         teacher_name=args.teacher_name,

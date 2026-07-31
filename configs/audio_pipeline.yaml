@@ -7,6 +7,17 @@ teacher: facebook/wav2vec2-large-960h
 
 onnx_opset: 17
 
+# convert_coreml is omitted: coremltools >= 6 does not accept ONNX input, so the stage raises
+# immediately (SHRINK-020, docs/reviews/codebase-audit.md CM1). Add it back once that lands.
+stages:
+  - prune
+  - distill
+  - export
+  - quantize
+  - convert_tflite
+  - convert_onnx_mobile
+  - benchmark
+
 quantization:
   precision: int8
   mode: static
