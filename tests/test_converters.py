@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import builtins
 import inspect
+import sys
 
 import pytest
 
@@ -110,7 +111,7 @@ class TestSavedModelInputNames:
             saved_model = type("sm", (), {"load": staticmethod(lambda _p: _Loaded())})
             nest = _Nest()
 
-        monkeypatch.setitem(__import__("sys").modules, "tensorflow", _FakeTF())
+        monkeypatch.setitem(sys.modules, "tensorflow", _FakeTF())
         return module, _Spec
 
     def test_prefers_keyword_inputs(self, monkeypatch, tmp_path):
