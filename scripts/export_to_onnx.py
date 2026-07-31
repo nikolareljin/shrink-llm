@@ -180,7 +180,9 @@ def main() -> None:
         "--validate", action="store_true", help="Run ORT inference validation after export"
     )
     parser.add_argument(
-        "--no-save-config", action="store_true", help="Skip saving model_config.json"
+        "--no-save-config",
+        action="store_true",
+        help="Skip writing the metadata JSON beside the model (<output stem>.json)",
     )
     args = parser.parse_args()
 

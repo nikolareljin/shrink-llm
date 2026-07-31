@@ -19,6 +19,32 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 log = logging.getLogger(__name__)
 
 
+def magnitude_threshold(tensor: torch.Tensor, sparsity: float) -> torch.Tensor:
+    """Value below which `sparsity` of |tensor| falls.
+
+    torch.quantile raises "input tensor is too large" above 2**24 elements, which every
+    transformer embedding matrix exceeds (BERT-base's is 23.4M). kthvalue has no such limit
+    and returns the same threshold, so it is used unconditionally rather than as a fallback.
+    """
+    flat = tensor.detach().abs().reshape(-1)
+    if flat.numel() == 0:
+        return torch.zeros((), dtype=tensor.dtype, device=tensor.device)
+    k = max(1, min(flat.numel(), int(round(sparsity * flat.numel()))))
+    return flat.kthvalue(k).values
+
+
+def _apply_magnitude_pruning(model: nn.Module, sparsity: float) -> None:
+    """Zero the smallest-magnitude weights of every 2-D+ trainable parameter."""
+    for _name, param in model.named_parameters():
+        if not (param.requires_grad and param.dim() >= 2):
+            continue
+        if sparsity >= 1.0:
+            param.data.zero_()
+        else:
+            threshold = magnitude_threshold(param.data, sparsity)
+            param.data[param.data.abs() < threshold] = 0.0
+
+
 class HeadImportanceScorer:
     """Compute attention head importance from average attention weights."""
 
@@ -148,16 +174,26 @@ class MLPPruner:
                 hooks.append(module.register_forward_hook(make_hook(name)))
 
         self.model.eval()
+        seen = 0
         with torch.no_grad():
             for i, batch in enumerate(dataloader):
                 if i >= num_batches:
                     break
                 self.model(**{k: v for k, v in batch.items() if k != "labels"})
+                seen += 1
 
         for h in hooks:
             h.remove()
+        if seen == 0:
+            log.warning("Dataloader yielded no batches; activation statistics are empty.")
+            return
+        if seen < num_batches:
+            log.info("Dataloader yielded %d of %d requested batches", seen, num_batches)
+        # Divide by the batches actually seen, not the number requested — otherwise a short
+        # loader biases every neuron's activation frequency toward zero, and that frequency is
+        # exactly what the pruning threshold is computed from.
         for name in self.activation_stats:
-            self.activation_stats[name] /= num_batches
+            self.activation_stats[name] /= seen
 
     def prune(self) -> int:
         """Zero out low-activation neurons. Returns number of pruned neurons."""
@@ -199,6 +235,13 @@ class LayerDropper:
 
 _SYNTHETIC_BATCHES = 64
 
+#: Tasks this script can prune.
+#:
+#: Must stay a superset of export_to_onnx.py's TASK_CONFIGS: run_pipeline.py passes the config's
+#: task straight through to every stage, so a task the exporter accepts and this one does not
+#: fails a run at its first stage. tests/test_pruning.py asserts the parity.
+SUPPORTED_TASKS = ("ocr", "legal", "audio", "classification")
+
 
 def _make_synthetic_dataloader(task: str, device: str, num_batches: int = _SYNTHETIC_BATCHES):
     """Yield synthetic input batches lazily to avoid pre-allocating all tensors on device."""
@@ -212,6 +255,9 @@ def _make_synthetic_dataloader(task: str, device: str, num_batches: int = _SYNTH
             }
         elif task == "audio":
             batch = {"input_values": torch.randn(1, 16000)}
+        elif task == "classification":
+            # Mirrors export_to_onnx.py's image-classification dummy input.
+            batch = {"pixel_values": torch.randn(1, 3, 224, 224)}
         else:
             batch = {
                 "input_ids": torch.randint(0, 1000, (1, 64)),
@@ -319,6 +365,11 @@ def _load_model_for_task(model_id: str, task: str, device: str) -> tuple[nn.Modu
 
         model = AutoModelForAudioClassification.from_pretrained(model_id, torch_dtype=torch.float32)
         processor = AutoFeatureExtractor.from_pretrained(model_id)
+    elif task == "classification":
+        from transformers import AutoFeatureExtractor, AutoModelForImageClassification
+
+        model = AutoModelForImageClassification.from_pretrained(model_id, torch_dtype=torch.float32)
+        processor = AutoFeatureExtractor.from_pretrained(model_id)
     else:
         from transformers import AutoModelForCausalLM
 
@@ -338,9 +389,7 @@ def count_nonzero_parameters(model: nn.Module) -> int:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Structured pruning for transformer models")
     parser.add_argument("--model", required=True, help="HuggingFace model ID or local path")
-    parser.add_argument(
-        "--task", required=True, choices=["ocr", "legal", "audio"], help="Task type"
-    )
+    parser.add_argument("--task", required=True, choices=list(SUPPORTED_TASKS), help="Task type")
     parser.add_argument(
         "--method",
         required=True,
@@ -394,13 +443,7 @@ def main() -> None:
                 "No attention layers found via hooks — model may not expose attention weights. "
                 "Falling back to magnitude pruning."
             )
-            for name, param in model.named_parameters():
-                if param.requires_grad and param.dim() >= 2:
-                    if args.sparsity >= 1.0:
-                        param.data.zero_()
-                    else:
-                        threshold = param.data.abs().quantile(args.sparsity)
-                        param.data[param.data.abs() < threshold] = 0.0
+            _apply_magnitude_pruning(model, args.sparsity)
 
     elif args.method == "layers":
         config = AutoConfig.from_pretrained(args.model)
@@ -416,13 +459,7 @@ def main() -> None:
         pruner.prune()
 
     elif args.method == "magnitude":
-        for name, param in model.named_parameters():
-            if param.requires_grad and param.dim() >= 2:
-                if args.sparsity >= 1.0:
-                    param.data.zero_()
-                else:
-                    threshold = param.data.abs().quantile(args.sparsity)
-                    param.data[param.data.abs() < threshold] = 0.0
+        _apply_magnitude_pruning(model, args.sparsity)
         log.info("Applied magnitude pruning with sparsity=%.2f", args.sparsity)
 
     after_params = count_parameters(model)
