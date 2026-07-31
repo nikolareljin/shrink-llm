@@ -12,7 +12,9 @@
 
 ## Global Constraints
 
+- **All commands assume an activated virtualenv** with `pip install -e ".[dev]"` already run, and are written as bare `python` / `pytest` / `ruff` / `black`. No particular virtualenv directory name is assumed.
 - **Never create a top-level module or package named `datasets`.** It shadows the HuggingFace dependency for anything run from the repo root, which is where `run_pipeline.py` runs every stage. New data code goes in `compression/data/`.
+- Python 3.10 has no `tomllib`. Anything parsing `pyproject.toml` goes through the `pyproject` fixture in `tests/conftest.py`, which falls back to `tomli`.
 - Python floor is 3.10; `pyproject.toml` declares `requires-python = ">=3.10"`. CI runs 3.10, 3.11 and 3.12.
 - Line length 100 (`ruff` and `black` are both configured to it). `ruff` lint selects `["E", "F", "W", "I", "N", "UP"]`.
 - Lint and format command: `ruff check scripts/ compression/ benchmarks/ mobile_deployment/ tests/` and `black --check` over the same paths.
@@ -150,7 +152,7 @@ class TestClassificationMetrics:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `.venv/bin/python -m pytest tests/test_metrics.py -q`
+Run: `python -m pytest tests/test_metrics.py -q`
 Expected: FAIL with `ModuleNotFoundError: No module named 'compression.metrics'`
 
 - [ ] **Step 3: Write minimal implementation**
@@ -176,10 +178,6 @@ def _safe_ratio(numerator: int, denominator: int) -> float:
     every threshold comparison silently false.
     """
     return numerator / denominator if denominator else 0.0
-
-
-def _f1(precision: float, recall: float) -> float:
-    return _safe_ratio(int(2 * precision * recall * 1_000_000), int((precision + recall) * 1_000_000))
 
 
 def confusion_counts(
@@ -257,11 +255,14 @@ def classification_metrics(
         else 2 * micro_precision * micro_recall / (micro_precision + micro_recall)
     )
 
+    def _macro(key: str) -> float:
+        return sum(entry[key] for entry in per_class) / num_labels if num_labels else 0.0
+
     result = {
         "accuracy": _safe_ratio(correct, total),
-        "precision_macro": _safe_ratio(int(sum(c["precision"] for c in per_class) * 1e9), num_labels * int(1e9)),
-        "recall_macro": _safe_ratio(int(sum(c["recall"] for c in per_class) * 1e9), num_labels * int(1e9)),
-        "f1_macro": _safe_ratio(int(sum(c["f1"] for c in per_class) * 1e9), num_labels * int(1e9)),
+        "precision_macro": _macro("precision"),
+        "recall_macro": _macro("recall"),
+        "f1_macro": _macro("f1"),
         "precision_micro": micro_precision,
         "recall_micro": micro_recall,
         "f1_micro": micro_f1,
@@ -277,19 +278,14 @@ def classification_metrics(
     return result
 ```
 
-**Note for the implementer:** the `_safe_ratio(int(... * 1e9), ...)` pattern above is
-deliberately clumsy — replace the macro averages with plain
-`sum(...) / num_labels if num_labels else 0.0` and delete the unused `_f1` helper. The tests
-define the contract; write the clean version that passes them.
-
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `.venv/bin/python -m pytest tests/test_metrics.py -q`
+Run: `python -m pytest tests/test_metrics.py -q`
 Expected: PASS, 9 tests
 
 - [ ] **Step 5: Lint, format, full suite**
 
-Run: `.venv/bin/ruff check compression/ tests/ && .venv/bin/black --check compression/ tests/ && .venv/bin/python -m pytest -q`
+Run: `ruff check compression/ tests/ && black --check compression/ tests/ && python -m pytest -q`
 Expected: all pass
 
 - [ ] **Step 6: Commit**
@@ -430,7 +426,7 @@ class TestLoadRecords:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `.venv/bin/python -m pytest tests/test_data_sources.py -q`
+Run: `python -m pytest tests/test_data_sources.py -q`
 Expected: FAIL with `ModuleNotFoundError: No module named 'compression.data'`
 
 - [ ] **Step 3: Write minimal implementation**
@@ -537,12 +533,12 @@ def load_records(
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `.venv/bin/python -m pytest tests/test_data_sources.py -q`
+Run: `python -m pytest tests/test_data_sources.py -q`
 Expected: PASS, 11 tests
 
 - [ ] **Step 5: Lint, format, full suite**
 
-Run: `.venv/bin/ruff check compression/ tests/ && .venv/bin/black --check compression/ tests/ && .venv/bin/python -m pytest -q`
+Run: `ruff check compression/ tests/ && black --check compression/ tests/ && python -m pytest -q`
 
 - [ ] **Step 6: Commit**
 
@@ -708,7 +704,7 @@ class TestDualTokenizerCollator:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `.venv/bin/python -m pytest tests/test_data_text_classification.py -q`
+Run: `python -m pytest tests/test_data_text_classification.py -q`
 Expected: FAIL with `ModuleNotFoundError`
 
 - [ ] **Step 3: Write minimal implementation**
@@ -863,12 +859,12 @@ __all__ = [
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `.venv/bin/python -m pytest tests/test_data_text_classification.py -q`
+Run: `python -m pytest tests/test_data_text_classification.py -q`
 Expected: PASS, 12 tests
 
 - [ ] **Step 5: Lint, format, full suite**
 
-Run: `.venv/bin/ruff check compression/ tests/ && .venv/bin/black --check compression/ tests/ && .venv/bin/python -m pytest -q`
+Run: `ruff check compression/ tests/ && black --check compression/ tests/ && python -m pytest -q`
 
 - [ ] **Step 6: Commit**
 
@@ -1007,7 +1003,7 @@ class TestCausalLMCollator:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `.venv/bin/python -m pytest tests/test_data_causal_lm.py -q`
+Run: `python -m pytest tests/test_data_causal_lm.py -q`
 Expected: FAIL with `ModuleNotFoundError`
 
 - [ ] **Step 3: Write minimal implementation**
@@ -1108,7 +1104,7 @@ Add to `compression/data/__init__.py` exports: `CausalLMBlockDataset`, `assert_s
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `.venv/bin/python -m pytest tests/test_data_causal_lm.py -q`
+Run: `python -m pytest tests/test_data_causal_lm.py -q`
 Expected: PASS, 10 tests
 
 - [ ] **Step 5: Lint, format, full suite**
@@ -1316,7 +1312,7 @@ class TestReadBundle:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `.venv/bin/python -m pytest tests/test_artifacts.py -q`
+Run: `python -m pytest tests/test_artifacts.py -q`
 Expected: FAIL with `ModuleNotFoundError: No module named 'compression.artifacts'`
 
 - [ ] **Step 3: Write minimal implementation**
@@ -1509,7 +1505,7 @@ def validate_bundle(bundle_dir: Path) -> list[str]:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `.venv/bin/python -m pytest tests/test_artifacts.py -q`
+Run: `python -m pytest tests/test_artifacts.py -q`
 Expected: PASS, 18 tests
 
 - [ ] **Step 5: Lint, format, full suite**
@@ -1673,7 +1669,7 @@ class TestTextClassificationExportEndToEnd:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `.venv/bin/python -m pytest tests/test_export.py -q`
+Run: `python -m pytest tests/test_export.py -q`
 Expected: FAIL with `ImportError: cannot import name 'SingleInputClassifier'`
 
 - [ ] **Step 3: Write minimal implementation**
@@ -1770,17 +1766,17 @@ record `num_labels`, `id2label` and `max_length`.
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `.venv/bin/python -m pytest tests/test_export.py -q`
+Run: `python -m pytest tests/test_export.py -q`
 Expected: PASS
 
 - [ ] **Step 5: Verify the parity tests still hold**
 
-Run: `.venv/bin/python -m pytest tests/test_benchmarks.py tests/test_pruning.py -q`
+Run: `python -m pytest tests/test_benchmarks.py tests/test_pruning.py -q`
 Expected: FAIL — `benchmark.py` and `prune.py` do not yet accept `text-classification`. This is the parity guard doing its job; Tasks 9 and 10 fix it. Add `text-classification` to `SUPPORTED_TASKS` in **both** `scripts/benchmark.py` and `scripts/prune.py` now, with a `build_dummy_inputs` branch in each, to keep the suite green.
 
 - [ ] **Step 6: Run the full suite**
 
-Run: `.venv/bin/python -m pytest -q`
+Run: `python -m pytest -q`
 Expected: PASS
 
 - [ ] **Step 7: Commit**
@@ -1920,7 +1916,7 @@ class TestValidatorCLI:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `.venv/bin/python -m pytest tests/test_export_app_artifacts.py -q`
+Run: `python -m pytest tests/test_export_app_artifacts.py -q`
 Expected: FAIL with `ModuleNotFoundError`
 
 - [ ] **Step 3: Write minimal implementation**
@@ -1958,7 +1954,7 @@ def run(bundle_dir: Path) -> int:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `.venv/bin/python -m pytest tests/test_export_app_artifacts.py -q`
+Run: `python -m pytest tests/test_export_app_artifacts.py -q`
 Expected: PASS, 9 tests
 
 - [ ] **Step 5: Add entry points to `pyproject.toml`**
@@ -2101,7 +2097,7 @@ class TestEvaluateClassification:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `.venv/bin/python -m pytest tests/test_evaluation.py -q`
+Run: `python -m pytest tests/test_evaluation.py -q`
 Expected: FAIL with `ModuleNotFoundError`
 
 - [ ] **Step 3: Write minimal implementation**
@@ -2194,7 +2190,7 @@ def evaluate_classification(
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `.venv/bin/python -m pytest tests/test_evaluation.py -q`
+Run: `python -m pytest tests/test_evaluation.py -q`
 Expected: PASS, 6 tests
 
 - [ ] **Step 5: Lint, format, full suite, commit**
@@ -2317,7 +2313,7 @@ class TestAccuracyGates:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `.venv/bin/python -m pytest tests/test_benchmarks.py -q`
+Run: `python -m pytest tests/test_benchmarks.py -q`
 Expected: FAIL — `astype(np.float32)` present; `min_precision` not handled
 
 - [ ] **Step 3: Write minimal implementation**
@@ -2374,7 +2370,7 @@ are both given and the task is `text-classification`, load records with
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `.venv/bin/python -m pytest tests/test_benchmarks.py -q`
+Run: `python -m pytest tests/test_benchmarks.py -q`
 Expected: PASS
 
 - [ ] **Step 5: Full suite, lint, commit**
@@ -2536,7 +2532,7 @@ class TestComputeLossTeacherInputs:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `.venv/bin/python -m pytest tests/test_distillation.py -q`
+Run: `python -m pytest tests/test_distillation.py -q`
 Expected: FAIL — `SUPPORTED_TASKS` lacks the task, `pool_hidden` undefined
 
 - [ ] **Step 3: Write minimal implementation**
@@ -2625,7 +2621,7 @@ New CLI arguments: `--eval-dataset`, `--text-column`, `--label-column`, `--max-l
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `.venv/bin/python -m pytest tests/test_distillation.py -q`
+Run: `python -m pytest tests/test_distillation.py -q`
 Expected: PASS
 
 - [ ] **Step 5: Full suite, lint, commit**
@@ -2761,7 +2757,7 @@ class TestAccuracyGateWiring:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `.venv/bin/python -m pytest tests/test_pipeline.py -q`
+Run: `python -m pytest tests/test_pipeline.py -q`
 Expected: FAIL — `stage_command` undefined
 
 - [ ] **Step 3: Write minimal implementation**
@@ -2836,15 +2832,15 @@ In the benchmark stage builder, move `min_f1` from `_known_unimplemented` to
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `.venv/bin/python -m pytest tests/test_pipeline.py -q`
+Run: `python -m pytest tests/test_pipeline.py -q`
 Expected: PASS
 
 - [ ] **Step 5: Verify the pipeline runs from a different working directory**
 
 ```bash
-cd /tmp && /home/nikos/Projects/shrink-llm/.venv/bin/python \
-  /home/nikos/Projects/shrink-llm/scripts/run_pipeline.py \
-  --config /home/nikos/Projects/shrink-llm/configs/ocr_pipeline.yaml --dry-run
+REPO="$PWD"
+cd /tmp && python "$REPO/scripts/run_pipeline.py" \
+  --config "$REPO/configs/ocr_pipeline.yaml" --dry-run
 ```
 Expected: completes, with absolute stage script paths in the logged commands
 
@@ -2936,12 +2932,12 @@ success_criteria:
 
 - [ ] **Step 2: Run the shipped-config tests**
 
-Run: `.venv/bin/python -m pytest tests/test_pipeline.py -k shipped -q`
+Run: `python -m pytest tests/test_pipeline.py -k shipped -q`
 Expected: PASS
 
 - [ ] **Step 3: Dry-run the config**
 
-Run: `.venv/bin/python scripts/run_pipeline.py --config configs/text_classification_pipeline.yaml --dry-run`
+Run: `python scripts/run_pipeline.py --config configs/text_classification_pipeline.yaml --dry-run`
 Expected: every stage builds a command; no errors
 
 - [ ] **Step 4: Update `SHRINK-018` in `docs/todos.yaml`**
@@ -3010,7 +3006,7 @@ class TestConsumerDocumentation:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `.venv/bin/python -m pytest tests/test_packaging.py -q`
+Run: `python -m pytest tests/test_packaging.py -q`
 Expected: FAIL — `docs/app_integration.md` does not exist
 
 - [ ] **Step 3: Write `docs/app_integration.md`**
@@ -3040,16 +3036,16 @@ Sections, each with real content and no placeholders:
 
 - [ ] **Step 5: Run test to verify it passes**
 
-Run: `.venv/bin/python -m pytest tests/test_packaging.py -q`
+Run: `python -m pytest tests/test_packaging.py -q`
 Expected: PASS
 
 - [ ] **Step 6: Full verification**
 
 ```bash
-.venv/bin/python -m pytest -q
-.venv/bin/ruff check scripts/ compression/ benchmarks/ mobile_deployment/ tests/
-.venv/bin/black --check scripts/ compression/ benchmarks/ mobile_deployment/ tests/
-for c in configs/*.yaml; do .venv/bin/python scripts/run_pipeline.py --config "$c" --dry-run >/dev/null || echo "FAILED $c"; done
+python -m pytest -q
+ruff check scripts/ compression/ benchmarks/ mobile_deployment/ tests/
+black --check scripts/ compression/ benchmarks/ mobile_deployment/ tests/
+for c in configs/*.yaml; do python scripts/run_pipeline.py --config "$c" --dry-run >/dev/null || echo "FAILED $c"; done
 ```
 Expected: all pass, no config failures
 
@@ -3071,9 +3067,10 @@ benchmark → Task 9; §5.10 pipeline → Task 11; §5.11 config → Task 12; §
 and 13; §5.13 docs → Task 13. §6's two behaviour changes are Task 11. §7's testing strategy is
 distributed across every task's Step 1.
 
-**Placeholder scan.** One deliberate exception: Task 1 Step 3 contains a clumsy expression with an
-explicit instruction to replace it, because the tests define the contract and the clean form is
-obvious. No "TBD", no "add error handling", no "similar to Task N".
+**Placeholder scan.** None. No "TBD", no "add error handling", no "similar to Task N", and no
+code an implementer is told not to use — an earlier draft of Task 1 Step 3 carried a deliberately
+clumsy expression with an instruction to replace it, which is itself a placeholder; the clean
+form is now written directly.
 
 **Type consistency.** `SUPPORTED_TASKS` is a tuple in `benchmark.py`, `prune.py` and `distill.py`.
 `validate_bundle` returns `list[str]` in Tasks 5, 7 and 13. `classification_metrics` keys
