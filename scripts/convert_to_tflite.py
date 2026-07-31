@@ -1,7 +1,11 @@
 """
 convert_to_tflite.py — Convert ONNX model to TFLite for Android deployment.
 
-Requires: pip install tensorflow onnx-tf  (or onnx2tf for newer models)
+Requires: pip install -e ".[tflite]"  (tensorflow + onnx2tf)
+
+onnx2tf is the supported path. onnx-tf is retained only as a fallback for pre-existing
+environments: its last release depends on tensorflow-addons, which was archived in May 2024 and
+supports TensorFlow ≤ 2.14, so it cannot be installed alongside a current TensorFlow.
 """
 
 from __future__ import annotations
@@ -16,28 +20,94 @@ log = logging.getLogger(__name__)
 
 def convert_onnx_to_tf(onnx_path: Path, tf_saved_model_dir: Path) -> None:
     """Convert ONNX to TensorFlow SavedModel using onnx2tf."""
+    # Only the import is guarded. Wrapping the conversion call too would swallow an ImportError
+    # raised *inside* onnx2tf -- a missing TensorFlow, say -- and then report "install onnx2tf"
+    # when onnx2tf is installed and the real cause was something else.
     try:
         import onnx2tf
+    except ImportError:
+        onnx2tf = None
 
+    if onnx2tf is not None:
         log.info("Converting ONNX → TF SavedModel via onnx2tf...")
         onnx2tf.convert(
             input_onnx_file_path=str(onnx_path),
             output_folder_path=str(tf_saved_model_dir),
             non_verbose=False,
         )
-    except ImportError:
-        log.warning("onnx2tf not installed. Trying onnx-tf...")
+    else:
+        log.warning("onnx2tf not installed. Trying the deprecated onnx-tf fallback...")
         try:
             import onnx
             from onnx_tf.backend import prepare
+        except ImportError as exc:
+            raise ImportError(
+                'Install the tflite extra: pip install -e ".[tflite]". onnx-tf is not a '
+                "supported alternative -- its last release requires tensorflow-addons, "
+                "archived in May 2024 and capped at TensorFlow 2.14."
+            ) from exc
 
-            model = onnx.load(str(onnx_path))
-            tf_rep = prepare(model)
-            tf_rep.export_graph(str(tf_saved_model_dir))
-        except ImportError:
-            raise ImportError("Install onnx2tf: pip install onnx2tf")
+        model = onnx.load(str(onnx_path))
+        tf_rep = prepare(model)
+        tf_rep.export_graph(str(tf_saved_model_dir))
 
     log.info("TF SavedModel saved to %s", tf_saved_model_dir)
+
+
+def _saved_model_input_names(tf_saved_model_dir: Path) -> list[str]:
+    """Ordered input names of the SavedModel's serving signature.
+
+    The representative dataset generator must yield tensors in the model's input order; a
+    bare list built from an unordered glob silently miscalibrates a multi-input model.
+    """
+    import tensorflow as tf
+
+    loaded = tf.saved_model.load(str(tf_saved_model_dir))
+    signature = loaded.signatures["serving_default"]
+    args, kwargs = signature.structured_input_signature
+
+    if kwargs:
+        return list(kwargs)
+
+    # A signature may expose its inputs positionally instead. Reading only kwargs would return
+    # an empty list here, and the generator would then feed TFLite nothing at all while
+    # reporting success.
+    positional = [
+        spec.name for spec in tf.nest.flatten(args) if getattr(spec, "name", None) is not None
+    ]
+    if positional:
+        return positional
+
+    raise ValueError(
+        f"The SavedModel at {tf_saved_model_dir} exposes no named inputs on its "
+        "'serving_default' signature, so calibration samples cannot be matched to inputs."
+    )
+
+
+def _representative_dataset_gen(dataset_dir: Path, input_names: list[str]):
+    """Yield one list of input tensors per .npz sample, ordered to match the model's inputs.
+
+    Calibration samples are .npz mappings of input name to array — the same format
+    quantize.py's SimpleCalibrationDataReader consumes, since run_pipeline.py can hand both
+    scripts the same directory. .npz also loads with allow_pickle=False, so a calibration
+    directory named in a config cannot execute code.
+    """
+    import numpy as np
+
+    def gen():
+        files = sorted(dataset_dir.glob("*.npz"))[:200]
+        for f in files:
+            with np.load(f, allow_pickle=False) as data:
+                missing = [name for name in input_names if name not in data.files]
+                if missing:
+                    raise ValueError(
+                        f"Calibration sample {f.name} is missing input(s) {missing}. "
+                        f"Each .npz must map every model input name to an array; "
+                        f"this model expects {input_names}."
+                    )
+                yield [data[name] for name in input_names]
+
+    return gen
 
 
 def convert_tf_to_tflite(
@@ -46,6 +116,7 @@ def convert_tf_to_tflite(
     quantization: str,
     representative_dataset_dir: Path | None,
     optimize_for: str,
+    integer_io: bool = False,
 ) -> None:
     """Convert TF SavedModel to TFLite."""
     import tensorflow as tf
@@ -63,23 +134,40 @@ def convert_tf_to_tflite(
     if quantization == "fp16":
         converter.target_spec.supported_types = [tf.float16]
     elif quantization == "int8":
+        if not representative_dataset_dir:
+            raise ValueError(
+                "--quantization int8 requires --representative-dataset: TFLite cannot produce "
+                "a full-integer model without calibration samples. Supply a directory of .npz "
+                "files, or use --quantization fp16."
+            )
+        if not representative_dataset_dir.is_dir():
+            raise ValueError(
+                f"--representative-dataset '{representative_dataset_dir}' is not a directory."
+            )
+        samples = sorted(representative_dataset_dir.glob("*.npz"))
+        if not samples:
+            raise ValueError(
+                f"No .npz calibration samples in '{representative_dataset_dir}'. Each file must "
+                f"map every model input name to an array."
+            )
+
         converter.target_spec.supported_ops = [
             tf.lite.OpsSet.TFLITE_BUILTINS_INT8,
             tf.lite.OpsSet.TFLITE_BUILTINS,
         ]
-        converter.inference_input_type = tf.int8
-        converter.inference_output_type = tf.int8
+        # Integer *weights* with float I/O is the default: it is what on-device runtimes that
+        # feed token ids and read probabilities expect (see docs/text_classification.md), and
+        # it avoids forcing every caller to de/requantize at the boundary. --integer-io opts
+        # into fully-integer tensors for accelerators that require them.
+        if integer_io:
+            converter.inference_input_type = tf.int8
+            converter.inference_output_type = tf.int8
 
-        if representative_dataset_dir:
-            import numpy as np
-
-            def representative_dataset_gen():
-                files = list(representative_dataset_dir.glob("*.npy"))[:200]
-                for f in files:
-                    data = np.load(f)
-                    yield [data.astype(np.float32)]
-
-            converter.representative_dataset = representative_dataset_gen
+        input_names = _saved_model_input_names(tf_saved_model_dir)
+        log.info("Calibrating on %d sample(s), inputs %s", len(samples), input_names)
+        converter.representative_dataset = _representative_dataset_gen(
+            representative_dataset_dir, input_names
+        )
 
     tflite_model = converter.convert()
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -122,7 +210,14 @@ def main() -> None:
     parser.add_argument(
         "--representative-dataset",
         type=Path,
-        help="Directory with .npy files for full-int8 calibration",
+        help="Directory of .npz calibration samples, each mapping input name to array "
+        "(required for --quantization int8)",
+    )
+    parser.add_argument(
+        "--integer-io",
+        action="store_true",
+        help="Make the int8 model's input/output tensors int8 too. Off by default: float I/O "
+        "with integer weights is what most on-device runtimes expect.",
     )
     parser.add_argument(
         "--optimize-for",
@@ -147,7 +242,12 @@ def main() -> None:
         convert_onnx_to_tf(args.input, tf_dir)
 
     convert_tf_to_tflite(
-        tf_dir, args.output, args.quantization, args.representative_dataset, args.optimize_for
+        tf_dir,
+        args.output,
+        args.quantization,
+        args.representative_dataset,
+        args.optimize_for,
+        integer_io=args.integer_io,
     )
 
     if args.validate:

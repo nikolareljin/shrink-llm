@@ -17,21 +17,27 @@ permissions:
 jobs:
   ci:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Matches requires-python = ">=3.10" and black's target-version. Pinning 3.11 alone
+        # left two of the three supported versions unexercised.
+        python-version: ["3.10", "3.11", "3.12"]
     steps:
       - uses: actions/checkout@v5
 
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python-version }}
 
       - name: Lint
         shell: bash
         run: |
           set -euo pipefail
           pip install ruff black
-          ruff check scripts/ compression/ benchmarks/ tests/
-          black --check scripts/ compression/ benchmarks/ tests/
+          ruff check scripts/ compression/ benchmarks/ mobile_deployment/ tests/
+          black --check scripts/ compression/ benchmarks/ mobile_deployment/ tests/
 
       - name: Test
         shell: bash
