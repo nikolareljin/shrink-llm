@@ -178,13 +178,8 @@ class TestCalibrationDataReader:
 
 
 class TestFp16Dependency:
-    def test_fp16_dependency_is_declared(self):
+    def test_fp16_dependency_is_declared(self, pyproject):
         """fp16_quantize imports onnxconverter_common; it must be installable."""
-        from pathlib import Path
-
-        import tomllib
-
-        pyproject = tomllib.loads(Path("pyproject.toml").read_text())
         deps = " ".join(pyproject["project"]["dependencies"])
         assert "onnxconverter-common" in deps
 
