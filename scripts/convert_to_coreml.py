@@ -1,7 +1,12 @@
 """
-convert_to_coreml.py — Convert ONNX model to CoreML for iOS/macOS deployment.
+convert_to_coreml.py — CoreML conversion for iOS/macOS deployment. CURRENTLY UNAVAILABLE.
 
-Requires: pip install coremltools  (macOS only for full validation)
+Every entry point raises: coremltools removed ONNX as an input format in 6.0, and this project
+requires >=7.2, so there is no supported version that can read what the rest of the pipeline
+produces. SHRINK-020 tracks restoring it behind a TorchScript or MIL front end;
+_convert_via_coremltools below holds the post-conversion path intact for that work.
+
+Requires (once restored): pip install -e ".[coreml]"  (macOS only for full validation)
 """
 
 from __future__ import annotations
@@ -37,22 +42,30 @@ def convert_onnx_to_coreml(
     compute_units: str,
     quantization: str,
 ) -> None:
-    """Convert ONNX model to CoreML .mlpackage."""
+    """Raise, explaining why ONNX cannot be converted to CoreML on a supported coremltools.
+
+    coremltools removed ONNX as an input format in 6.0 and this project requires >=7.2, so
+    ct.convert() on a ModelProto fails with a generic "unable to determine the type of the
+    model" several frames down. Restoring the capability needs an ONNX->TorchScript or
+    ONNX->MIL front end -- tracked as SHRINK-020.
+
+    The version is reported only when coremltools happens to be importable. Importing it first
+    would mean anyone without the optional `coreml` extra got "install coremltools" instead of
+    this explanation -- sending them to install a package that cannot do the job.
+    """
     try:
         import coremltools as ct
-    except ImportError:
-        raise ImportError("Install coremltools: pip install coremltools")
 
-    # coremltools removed ONNX as an input format in 6.0; this project requires >=7.2, so
-    # ct.convert() on a ModelProto fails with a generic "unable to determine the type of the
-    # model" several frames down. Say so here instead. Restoring the capability needs an
-    # ONNX->TorchScript or ONNX->MIL front end — tracked as SHRINK-020.
+        installed = f"coremltools {ct.__version__}"
+    except ImportError:
+        installed = "coremltools"
+
     raise NotImplementedError(
-        f"Cannot convert '{onnx_path}': coremltools {ct.__version__} does not accept ONNX input. "
-        "ONNX support was removed in coremltools 6.0, and this project requires >=7.2; "
+        f"Cannot convert '{onnx_path}' to CoreML: {installed} does not accept ONNX input. "
+        "ONNX support was removed in coremltools 6.0 and this project requires >=7.2; "
         "ct.convert() accepts only TorchScript, TensorFlow or MIL sources.\n"
-        "Until SHRINK-020 lands, export a TorchScript module and convert that, or drop "
-        "'convert_coreml' from --stages. See docs/reviews/codebase-audit.md (CM1)."
+        "Until SHRINK-020 lands, drop 'convert_coreml' from --stages or from the config's "
+        "stages list. See docs/reviews/codebase-audit.md (CM1)."
     )
 
 
