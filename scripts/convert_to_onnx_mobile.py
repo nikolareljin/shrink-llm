@@ -20,13 +20,16 @@ def optimize_graph(
     input_path: Path,
     output_path: Path,
     optimization_level: str,
-    target: str,
-    enable_nhwc: bool,
 ) -> None:
-    """Apply ONNX Runtime graph optimizations for mobile."""
+    """Apply ONNX Runtime graph optimizations for mobile.
+
+    Deliberately platform-agnostic: ORT's graph optimizations are not target-specific, so the
+    previous `target` and `enable_nhwc` parameters were accepted and never read. NHWC layout is
+    handled by convert_layout_to_nhwc before this runs.
+    """
     import onnxruntime as ort
 
-    log.info("Running ONNX graph optimization (level=%s, target=%s)...", optimization_level, target)
+    log.info("Running ONNX graph optimization (level=%s)...", optimization_level)
 
     level_map = {
         "basic": ort.GraphOptimizationLevel.ORT_ENABLE_BASIC,
@@ -63,7 +66,8 @@ def convert_layout_to_nhwc(input_path: Path, output_path: Path) -> None:
         log.info("NHWC layout applied → %s", output_path)
     except ImportError:
         log.warning(
-            "transpose_optimizer not available in your ORT version — skipping NHWC conversion"
+            "onnxruntime.tools.transpose_optimizer is not available in onnxruntime — the model "
+            "was copied through UNCHANGED and is still NCHW. --enable-nhwc had no effect."
         )
         import shutil
 
@@ -81,19 +85,27 @@ def downgrade_opset(input_path: Path, output_path: Path, target_opset: int = 13)
 
 def generate_ort_model(input_path: Path, output_path: Path) -> None:
     """Generate .ort format (ORT flatbuffers) for faster mobile loading."""
-    try:
-        from onnxruntime.tools import convert_onnx_models_to_ort
+    import shutil
+    import tempfile
 
-        log.info("Generating .ort flatbuffers format...")
-        convert_onnx_models_to_ort.convert_onnx_models_to_ort(str(input_path.parent))
-        ort_path = input_path.with_suffix(".ort")
-        if ort_path.exists() and output_path != ort_path:
-            import shutil
+    from onnxruntime.tools import convert_onnx_models_to_ort
 
-            shutil.copy(str(ort_path), str(output_path))
-        log.info(".ort model → %s", output_path)
-    except Exception as e:
-        log.warning("ORT format generation failed: %s", e)
+    log.info("Generating .ort flatbuffers format...")
+    # Stage the model alone in a temp directory first. convert_onnx_models_to_ort converts
+    # every .onnx under the path it is given, so passing input_path.parent silently converted
+    # the base export, the quantized model and the mobile model as a side effect of asking
+    # for one.
+    with tempfile.TemporaryDirectory() as tmp:
+        staged = Path(tmp) / input_path.name
+        shutil.copy(str(input_path), str(staged))
+        convert_onnx_models_to_ort.convert_onnx_models_to_ort(staged)
+
+        produced = sorted(Path(tmp).glob("**/*.ort"))
+        if not produced:
+            raise RuntimeError(f"convert_onnx_models_to_ort produced no .ort file for {input_path}")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(str(produced[0]), str(output_path))
+    log.info(".ort model → %s", output_path)
 
 
 def _log_size_comparison(before: Path, after: Path) -> None:
@@ -116,12 +128,6 @@ def main() -> None:
         default="extended",
         choices=["basic", "extended", "all"],
         help="ORT graph optimization level (default: extended)",
-    )
-    parser.add_argument(
-        "--target",
-        default="android",
-        choices=["android", "ios"],
-        help="Target mobile platform (default: android)",
     )
     parser.add_argument(
         "--enable-nhwc",
@@ -154,9 +160,7 @@ def main() -> None:
         downgrade_opset(current_input, opset_path, args.downgrade_opset)
         current_input = opset_path
 
-    optimize_graph(
-        current_input, args.output, args.optimization_level, args.target, args.enable_nhwc
-    )
+    optimize_graph(current_input, args.output, args.optimization_level)
 
     if args.generate_ort:
         ort_output = args.output.with_suffix(".ort")

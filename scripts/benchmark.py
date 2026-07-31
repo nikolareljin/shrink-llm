@@ -128,6 +128,15 @@ def get_runner(model_path: str, runtime: str):
         raise ValueError(f"Unknown runtime: {runtime}")
 
 
+#: Tasks this script can benchmark.
+#:
+#: Must stay a superset of export_to_onnx.py's TASK_CONFIGS: run_pipeline.py passes the
+#: config's task straight through to both scripts, so a task the exporter accepts and this
+#: one does not fails a whole run at its last stage, after every expensive stage has
+#: already succeeded. tests/test_benchmarks.py asserts the parity.
+SUPPORTED_TASKS = ("ocr", "legal", "audio", "classification")
+
+
 def build_dummy_inputs(task: str) -> dict:
     if task == "ocr":
         return {"pixel_values": np.random.randn(1, 3, 384, 384).astype(np.float32)}
@@ -138,6 +147,9 @@ def build_dummy_inputs(task: str) -> dict:
         }
     elif task == "audio":
         return {"input_values": np.random.randn(1, 16000).astype(np.float32)}
+    elif task == "classification":
+        # Mirrors export_to_onnx.py's image-classification dummy input.
+        return {"pixel_values": np.random.randn(1, 3, 224, 224).astype(np.float32)}
     else:
         raise ValueError(f"Unknown task: {task}")
 
@@ -243,7 +255,7 @@ def main() -> None:
     parser.add_argument(
         "--model", required=True, help="Model file path (.onnx, .tflite, .mlpackage)"
     )
-    parser.add_argument("--task", required=True, choices=["ocr", "legal", "audio"])
+    parser.add_argument("--task", required=True, choices=list(SUPPORTED_TASKS))
     parser.add_argument(
         "--runtime",
         default="onnxruntime",

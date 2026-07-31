@@ -60,6 +60,30 @@ def load_config(config_path: Path) -> dict:
         return yaml.safe_load(f)
 
 
+def resolve_requested_stages(cli_stages: str | None, config: dict, on_error) -> list[str]:
+    """Decide which stages a run covers: --stages, else the config's 'stages', else all.
+
+    Configs need a say here because some are only valid for a subset. legal_pipeline.yaml
+    selects GPTQ, which produces a directory artifact that the ONNX-consuming stages cannot
+    read — so with the old unconditional "default to every stage" it could not be run at all.
+    """
+    if cli_stages is not None:
+        return [s.strip() for s in cli_stages.split(",")]
+
+    configured = config.get("stages")
+    if configured is None:
+        return list(VALID_STAGES)
+    if isinstance(configured, str):
+        configured = [s.strip() for s in configured.split(",")]
+    if not isinstance(configured, list) or not all(isinstance(s, str) for s in configured):
+        on_error("Config key 'stages' must be a list of stage names or a comma-separated string")
+    resolved = [str(s).strip() for s in configured if str(s).strip()]
+    if not resolved:
+        on_error("Config key 'stages' is empty; remove it to run every stage")
+    log.info("Using stages from config: %s", ", ".join(resolved))
+    return resolved
+
+
 def order_stages(requested_stages: Iterable[str]) -> list[str]:
     requested = {stage.strip() for stage in requested_stages if stage.strip()}
     return [stage for stage in VALID_STAGES if stage in requested]
@@ -265,6 +289,8 @@ def build_stage_args(
         ]
         if mode == "gptq":
             args += ["--model-id", model_id]
+            if q.get("group_size"):
+                args += ["--group-size", str(q["group_size"])]
         else:
             args = ["--input", onnx_path] + args
         if mode == "static":
@@ -372,10 +398,10 @@ def build_stage_args(
                     )
                     representative_dataset = None
                     quantization = "fp16"
-                elif not any(dataset_path.glob("*.npy")):
+                elif not any(dataset_path.glob("*.npz")):
                     log.warning(
                         "convert_tflite requested quantization='int8' but representative dataset "
-                        "directory '%s' contains no '*.npy' files. Downgrading to 'fp16'.",
+                        "directory '%s' contains no '*.npz' files. Downgrading to 'fp16'.",
                         dataset_path,
                     )
                     representative_dataset = None
@@ -452,24 +478,30 @@ def build_stage_args(
                 type(criteria).__name__,
             )
             criteria = {}
-        _implemented_criteria = {"max_size_mb", "max_latency_ms"}
-        _known_unimplemented = {"max_cer", "max_accuracy_drop_pct", "min_accuracy", "min_f1"}
+        _implemented_criteria = {"max_size_mb", "max_latency_ms", "min_accuracy"}
+        _known_unimplemented = {"max_cer", "max_accuracy_drop_pct", "min_f1"}
         _known_criteria = _implemented_criteria | _known_unimplemented
         for key in sorted(set(criteria) - _known_criteria):
             log.warning(
                 "Unrecognized success_criteria key %r will be ignored by benchmark gate translation",
                 key,
             )
+        # Warn, not debug: at the default INFO level a debug message never prints, so a
+        # configured-but-unenforced threshold produced a green run with no indication that
+        # the gate had not been evaluated.
         for key in sorted(set(criteria) & _known_unimplemented):
-            log.debug(
-                "success_criteria key %r is recognized but not yet wired to benchmark args; "
-                "gate will not be checked",
+            log.warning(
+                "success_criteria key %r is recognized but has no benchmark gate yet; "
+                "the threshold %r will NOT be enforced by this run",
                 key,
+                criteria[key],
             )
         if criteria.get("max_size_mb") is not None:
             args += ["--max-size-mb", str(criteria["max_size_mb"])]
         if criteria.get("max_latency_ms") is not None:
             args += ["--max-latency-ms-p95", str(criteria["max_latency_ms"])]
+        if criteria.get("min_accuracy") is not None:
+            args += ["--min-accuracy", str(criteria["min_accuracy"])]
         return args
 
     return []
@@ -638,9 +670,18 @@ def _update_manifest(
     exit_code: int | None = None,
     artifacts: list[dict] | None = None,
     error: dict | None = None,
+    status: str | None = None,
 ) -> None:
-    """Append a stage record to the pipeline manifest JSON."""
-    if success:
+    """Append a stage record to the pipeline manifest JSON.
+
+    status defaults to 'ok'/'failed' from success. Pass status='skipped' for a stage that
+    was requested but never invoked; such a record carries a null exit_code, since no
+    process ran to produce one.
+    """
+    resolved_status = status if status is not None else ("ok" if success else "failed")
+    if resolved_status == "skipped":
+        resolved_exit_code = None
+    elif success:
         resolved_exit_code = 0 if exit_code is None else exit_code
     else:
         if exit_code is None or exit_code == 0:
@@ -649,7 +690,7 @@ def _update_manifest(
     record: dict = {
         "stage": stage,
         "args": args_list,
-        "status": "ok" if success else "failed",
+        "status": resolved_status,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "exit_code": resolved_exit_code,
         "artifacts": artifacts or [],
@@ -687,8 +728,9 @@ def main() -> None:
     parser.add_argument("--config", required=True, type=Path, help="Pipeline YAML config file")
     parser.add_argument(
         "--stages",
-        default=",".join(VALID_STAGES),
-        help=f"Comma-separated stages to run (default: all). Options: {', '.join(VALID_STAGES)}",
+        default=None,
+        help="Comma-separated stages to run. Defaults to the config's 'stages' list if it has "
+        f"one, otherwise all of: {', '.join(VALID_STAGES)}",
     )
     parser.add_argument(
         "--output-dir", type=Path, default=Path("models/student"), help="Output directory"
@@ -705,7 +747,7 @@ def main() -> None:
     if not config.get("task"):
         parser.error("Config must specify a non-empty 'task' field")
 
-    requested_stages = [s.strip() for s in args.stages.split(",")]
+    requested_stages = resolve_requested_stages(args.stages, config, parser.error)
     stages = order_stages(requested_stages)
     try:
         validate_stage_selection(stages, config)
@@ -747,7 +789,24 @@ def main() -> None:
     for stage in stages:
         stage_args = build_stage_args(stage, config, args.output_dir, state, dry_run=args.dry_run)
         if not stage_args and stage not in ("export",):
-            log.warning("Stage '%s' produced no args, skipping", stage)
+            # Record the skip rather than dropping it. Previously this `continue` ran
+            # before results[stage] was set and before _update_manifest, so a requested
+            # stage that could not be built left no trace in either the summary or
+            # manifest.json — the run looked like it had never asked for that stage.
+            log.warning(
+                "Stage '%s' produced no args and will not run; see the warning above for why",
+                stage,
+            )
+            results[stage] = "SKIPPED"
+            if not args.dry_run:
+                _update_manifest(
+                    manifest_path,
+                    stage,
+                    stage_args,
+                    False,
+                    status="skipped",
+                    error={"message": f"Stage '{stage}' was requested but produced no arguments"},
+                )
             continue
         _subdir = _stage_scan_subdirs.get(stage)
         scan_root = (args.output_dir / _subdir) if _subdir else None
@@ -781,7 +840,7 @@ def main() -> None:
 
     log.info("\nPipeline summary:")
     for stage, status in results.items():
-        symbol = "✓" if status == "OK" else "✗"
+        symbol = {"OK": "✓", "SKIPPED": "–"}.get(status, "✗")
         log.info("  %s %s: %s", symbol, stage, status)
 
     if not args.dry_run and manifest_path.exists():

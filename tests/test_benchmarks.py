@@ -30,11 +30,42 @@ class TestBuildDummyInputs:
         assert "input_values" in inputs
         assert inputs["input_values"].dtype == np.float32
 
+    def test_classification(self):
+        from scripts.benchmark import build_dummy_inputs
+
+        inputs = build_dummy_inputs("classification")
+        assert "pixel_values" in inputs
+        assert inputs["pixel_values"].shape == (1, 3, 224, 224)
+
     def test_unknown_task_raises(self):
         from scripts.benchmark import build_dummy_inputs
 
         with pytest.raises(ValueError):
             build_dummy_inputs("invalid_task")
+
+
+class TestTaskParityWithExporter:
+    """run_pipeline.py passes the config's task straight to both scripts.
+
+    A task the exporter accepts and the benchmark does not fails a pipeline run at its
+    last stage, after every expensive stage has already succeeded.
+    """
+
+    def test_benchmark_accepts_every_exporter_task(self):
+        from scripts.benchmark import SUPPORTED_TASKS
+        from scripts.export_to_onnx import TASK_CONFIGS
+
+        missing = sorted(set(TASK_CONFIGS) - set(SUPPORTED_TASKS))
+        assert not missing, (
+            f"benchmark.py rejects task(s) export_to_onnx.py accepts: {missing}. "
+            "A pipeline configured for one of these dies at the benchmark stage."
+        )
+
+    def test_every_benchmark_task_has_dummy_inputs(self):
+        from scripts.benchmark import SUPPORTED_TASKS, build_dummy_inputs
+
+        for task in SUPPORTED_TASKS:
+            assert build_dummy_inputs(task), f"no dummy inputs for accepted task {task!r}"
 
 
 class TestBenchmarkResult:
