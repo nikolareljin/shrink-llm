@@ -219,7 +219,7 @@ todos:
       classifier can be exported. Add a distinct 'text-classification' task that loads
       AutoModelForSequenceClassification with AutoTokenizer and traces input_ids.
 
-      The first consumer (ScamSeal) runs tflite_flutter's Interpreter.run, which feeds a
+      The first consumer runs tflite_flutter's Interpreter.run, which feeds a
       single input tensor, and normalises multi-class output by its sum rather than with a
       softmax. Provide a wrapper that derives attention_mask from input_ids in-graph and
       applies softmax, exported by default; keep two-input export behind a flag for

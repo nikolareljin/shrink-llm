@@ -256,7 +256,7 @@ must run from the repo root — which puts the root on `sys.path`. Reproduced:
 
 ```
 >>> import datasets
-resolved to: /home/nikos/Projects/shrink-llm/datasets/__init__.py
+resolved to: <repo-root>/datasets/__init__.py
 has load_dataset: False
 ```
 

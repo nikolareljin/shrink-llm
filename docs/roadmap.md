@@ -73,8 +73,8 @@
 
 ## Phase 7: Text classification (unscheduled)
 
-Driven by the first external consumer: [ScamSeal](https://github.com/nikolareljin/scam-seal)
-needs an on-device scam classifier as TFLite. The gap analysis is in
+Driven by the first external consumer, which needs an on-device text classifier as
+TFLite. The gap analysis is in
 [`text_classification.md`](text_classification.md); issues are `SHRINK-015` … `SHRINK-019`.
 
 - [ ] Add a `text-classification` task to `export_to_onnx.py` — `AutoModelForSequenceClassification`,
