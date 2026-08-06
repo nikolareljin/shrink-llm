@@ -7,7 +7,7 @@ All notable changes to this project will be documented in this file.
 ### Added
 
 - `docs/text_classification.md` — gap analysis for producing text classifiers, driven by the
-  first external consumer (the downstream consumer, an on-device scam detector shipping TFLite). Records that
+  first external consumer (a downstream on-device classifier shipping TFLite). Records that
   `export_to_onnx.py`'s `classification` task is *image* classification, that `distill.py` is
   gated to `SUPPORTED_TASKS = ("legal",)` while `run_pipeline.py` silently skips the
   distillation stage for anything else, that nothing emits the tokenizer a compressed
