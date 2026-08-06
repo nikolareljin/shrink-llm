@@ -4,9 +4,8 @@ Status: proposed
 Last updated: 2026-07-30
 
 ShrinkLLM compresses OCR, causal-LM ("legal") and audio models today. It cannot currently
-produce a **text classifier**, which is the artifact a downstream consumer needs
-([the downstream consumer](https://example.invalid/downstream-consumer): an on-device scam detector that runs a
-TFLite classifier through `tflite_flutter`).
+produce a **text classifier**, which is the artifact a downstream consumer needs: an
+on-device application that runs a TFLite classifier through `tflite_flutter`.
 
 This document records what is missing, why each piece is missing, and what "done" looks like.
 The corresponding issues are `SHRINK-015` … `SHRINK-019` in [`todos.yaml`](todos.yaml).
@@ -106,8 +105,7 @@ ends: a `task: text-classification` config would clear four stages and then die 
 ## 2. Two constraints the consumer's runtime imposes
 
 These are worth recording here because they change what the *export* stage must produce. They
-were found by reading the downstream consumer's runtime against MobileBERT's input signature; the full analysis
-is in that repo's `docs/ON_DEVICE_MODEL_PIPELINE.md`.
+were found by reading that consumer's runtime against MobileBERT's input signature.
 
 **One input tensor.** The consumer calls `Interpreter.run(input, output)` — a single input. A
 `transformers` sequence classifier takes `input_ids` *and* `attention_mask`. The export must
