@@ -158,3 +158,10 @@ intentionally ignored.
 ## License
 
 Apache 2.0 — see [LICENSE](LICENSE).
+
+
+## Clone traffic
+
+![Clone traffic](https://raw.githubusercontent.com/nikolareljin/stats/main/charts/shrink-llm.svg)
+
+_Updated daily. Total and unique cloners over the last 14 days._
